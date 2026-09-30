@@ -1,5 +1,5 @@
 # Orvian Launcher
-Custom launcher developed with Trae.ai and Antigravity for the private Orvian server.
+Custom launcher developed with [Antigravity](https://antigravity.google/) for the private Orvian server.
 
 This launcher automatically downloads and manages the official modpack from the OrvianModpack repository, ensuring all players have the correct setup with minimal effort.
 
