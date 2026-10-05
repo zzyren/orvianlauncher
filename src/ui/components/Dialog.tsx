@@ -46,6 +46,21 @@ export function Dialog({ open, title, description, onClose, dismissible = true, 
         event.preventDefault()
         if (dismissible) onClose()
       }}
+      onKeyDown={(event) => {
+        // The native dialog makes the page inert but does not wrap Tab on every platform: keep focus inside
+        if (event.key !== 'Tab' || !ref.current) return
+        const focusable = [...ref.current.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], summary, [tabindex]:not([tabindex="-1"])')].filter((el) => !el.hasAttribute('disabled'))
+        if (focusable.length === 0) return
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first.focus()
+        }
+      }}
       onMouseDown={(event) => {
         if (dismissible && event.target === ref.current) onClose()
       }}

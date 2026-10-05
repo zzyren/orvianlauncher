@@ -301,7 +301,7 @@ function Explore({ installedKeys, installing, onInstall }: { installedKeys: Set<
             <li key={key} className="hit-row">
               <ModIcon src={hit.icon_url} title={hit.title} />
               <div className="hit-info">
-                <h3 className="hit-title" translate="no">{hit.title}</h3>
+                <h2 className="hit-title" translate="no">{hit.title}</h2>
                 <p className="hit-desc">{hit.description || 'Sin descripción.'}</p>
                 <p className="hit-meta">Por {hit.author}{hit.downloads ? ` · ${formatCount(hit.downloads)} descargas` : ''}</p>
               </div>
