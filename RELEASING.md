@@ -44,18 +44,15 @@ borrador → `modpack.zip` → `orvian-manifest.json` → publicar, así que nin
   launcher nuevo** y espera a que los jugadores lo reciban.
 - El token de GitHub debe ser *fine-grained*, limitado a `zzyren/orvianmodpack`, con **Contents: read and write**.
 
-## Pendiente del propietario
+## Decisiones tomadas
 
-Estas acciones no se pueden hacer desde el código:
-
-1. **Aplicación propia de Azure.** El launcher usa el client ID público del launcher oficial de Mojang
-   (`electron/config.ts` › `msClientId`). Microsoft pide a los launchers de terceros registrar su propia
-   aplicación y solicitar acceso a la API de Minecraft. Cuando exista, cambia el ID (y el redirect si hace falta).
-2. **Firma de código (Authenticode).** Sin certificado, SmartScreen avisa al instalar y no se verifica el
-   editor. Con el certificado, configura `win.signtoolOptions` / `publisherName` en `package.json`.
-3. **Historial de git.** Las rutas y nombres de jugador de `pack/overrides` y `.cache` siguen en el historial
-   aunque ya no estén en el árbol. Purgarlo (`git filter-repo`) reescribe el historial y exige coordinar a todos
-   los que tengan un clon: decisión del propietario.
-4. **Dirección del servidor** (`payo.exaroton.me:25565`) y duración mínima de la splash (`minSplashMs`, 5 s):
-   confirmar o cambiar en `electron/config.ts`. El manifest también puede llevar un bloque `server` para
-   cambiar la dirección sin publicar un launcher nuevo.
+- **Client ID de Microsoft:** se mantiene el público del launcher de Mojang (`msClientId` en
+  `electron/config.ts`). Es un launcher privado para pocos jugadores; si Microsoft dejara de aceptarlo,
+  habría que registrar una aplicación propia de Azure.
+- **Firma de código:** no se firma (tiene coste). SmartScreen avisará al instalar; hay que elegir
+  «Más información › Ejecutar de todos modos».
+- **Historial de git:** no se purga. Contiene rutas y nombres de jugador antiguos de `pack/` y `.cache`, pero
+  borrarlos exige reescribir el historial y forzar el push, y para un repositorio privado de amigos el
+  riesgo no compensa. Si algún día se hace público, usar `git filter-repo` antes.
+- **Servidor:** `payo.exaroton.me:13133` (`electron/config.ts`). El manifest puede llevar un bloque `server`
+  para cambiarlo sin publicar un launcher nuevo.

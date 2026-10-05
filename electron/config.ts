@@ -26,7 +26,7 @@ const DEFAULTS: Omit<OrvianConfig, 'dataDir' | 'manifestUrl' | 'devServerUrl'> =
   adminUuids: ['a8603c06e7474c44b0bde33067ab6627'],
   msClientId: '00000000402b5328',
   minSplashMs: 5000,
-  server: { name: 'Orvian', address: 'payo.exaroton.me', port: 25565 }
+  server: { name: 'Orvian', address: 'payo.exaroton.me', port: 13133 }
 }
 
 const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/

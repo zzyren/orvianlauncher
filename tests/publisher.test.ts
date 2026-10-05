@@ -141,7 +141,7 @@ describe('buildManifestFromArchive', () => {
     const url = 'https://github.com/zzyren/orvianmodpack/releases/download/v1.0.5/modpack.zip'
     expect(manifest.archive).toEqual({ url, sha256: sha256(zip), size: zip.length })
     expect(manifest.files.every((f) => f.url === url)).toBe(true)
-    expect(manifest.server).toMatchObject({ address: 'payo.exaroton.me', port: 25565 })
+    expect(manifest.server).toMatchObject({ address: 'payo.exaroton.me', port: 13133 })
     expect(ManifestSchema.safeParse(manifest).success).toBe(true)
   })
 

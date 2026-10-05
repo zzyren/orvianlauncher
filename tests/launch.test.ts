@@ -118,7 +118,7 @@ describe('game pipeline', () => {
 
   it('opens the Orvian server when asked', async () => {
     await playGame(deps, { quickPlay: true })
-    expect(vi.mocked(launch).mock.calls[0][0].quickPlayMultiplayer).toBe('payo.exaroton.me:25565')
+    expect(vi.mocked(launch).mock.calls[0][0].quickPlayMultiplayer).toBe('payo.exaroton.me:13133')
   })
 
   it('plays the installed version without consulting the manifest or syncing', async () => {
