@@ -6,3 +6,9 @@ release/
 .env.*
 !.env.example
 *.log
+
+# Modpack sources and caches live outside version control (published via GitHub Releases)
+pack/
+.cache/
+test-results/
+playwright-report/

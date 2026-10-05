@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, nativeImage, dialog, ipcMain, shell, screen } from 'electron'
+import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, screen } from 'electron'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
@@ -72,7 +72,7 @@ function showWindow(win: BrowserWindow) {
   win.focus()
 }
 
-function safeQuit(_win: BrowserWindow | null) {
+function safeQuit() {
   if (isMinecraftRunning()) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       showWindow(mainWindow)
@@ -160,7 +160,7 @@ function toggleTrayWindow() {
   }
 }
 
-function createTray(win: BrowserWindow) {
+function createTray() {
   const icon = getTrayIcon()
   tray = new Tray(icon)
   tray.setToolTip('Orvian Launcher')
@@ -236,7 +236,7 @@ async function createWindow() {
     void win.loadFile(join(app.getAppPath(), 'dist/index.html'))
   }
 
-  createTray(win)
+  createTray()
 }
 
 // Configurar electron-updater antes de que la app esté lista
@@ -344,7 +344,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('app:quit', () => {
     if (mainWindow) {
-      safeQuit(mainWindow)
+      safeQuit()
     } else {
       isQuitting = true
       app.quit()
