@@ -7,6 +7,7 @@ const api = {
   repair: () => ipcRenderer.invoke('pack:repair'),
   play: () => ipcRenderer.invoke('game:play'),
   login: () => ipcRenderer.invoke('account:login'),
+  cancelLogin: () => ipcRenderer.invoke('account:cancel-login'),
   logout: () => ipcRenderer.invoke('account:logout'),
   setRam: (gb: number) => ipcRenderer.invoke('settings:ram', gb),
   openFolder: (kind: 'mods' | 'shaders' | 'resourcepacks' | 'logs') => ipcRenderer.invoke('folder:open', kind),
