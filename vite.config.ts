@@ -1,5 +1,4 @@
-import type { Plugin } from 'vite'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // The React fast-refresh preamble is an inline script and HMR uses a websocket, so the dev
@@ -22,8 +21,5 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true
-  },
-  test: {
-    setupFiles: ['./tests/setup.ts']
   }
 })
