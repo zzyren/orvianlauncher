@@ -151,7 +151,8 @@ export class LauncherStore {
   }
 
   setServer(status: ServerStatus): void {
-    this.server = status
+    // The renderer never needs the server address, so it is not sent to it.
+    this.server = { ...status, address: '' }
     this.changed()
   }
 

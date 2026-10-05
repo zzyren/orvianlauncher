@@ -1,8 +1,6 @@
-import { useState } from 'react'
-import { Copy, Eye, EyeOff, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import type { ServerStatus } from '../../shared/launcher-state'
 import { Button, IconButton } from './Button'
-import { useToast } from './Toast'
 
 interface ServerCardProps {
   server: ServerStatus
@@ -19,15 +17,6 @@ const STATE_LABEL: Record<ServerStatus['state'], string> = {
 }
 
 export function ServerCard({ server, onPlay, onRefresh }: ServerCardProps) {
-  const toast = useToast()
-  const [revealed, setRevealed] = useState(false)
-  const copyAddress = (): void => {
-    navigator.clipboard
-      .writeText(server.address)
-      .then(() => toast({ kind: 'info', message: 'Dirección copiada.' }))
-      .catch(() => toast({ kind: 'error', message: 'No se pudo copiar la dirección.' }))
-  }
-
   return (
     <section className="card server-card" aria-labelledby="server-card-title">
       <div className="card-header">
@@ -44,15 +33,6 @@ export function ServerCard({ server, onPlay, onRefresh }: ServerCardProps) {
       </p>
       {server.state === 'online' && server.motd && <p className="server-motd selectable">{server.motd}</p>}
       {server.state === 'offline' && <p className="server-motd">El servidor puede estar en reposo y arrancar al conectarte.</p>}
-      <div className="server-address">
-        <code translate="no" className={revealed ? 'selectable' : undefined}>{revealed ? server.address : '•'.repeat(12)}</code>
-        <IconButton label={revealed ? 'Ocultar la dirección' : 'Mostrar la dirección'} onClick={() => setRevealed((v) => !v)}>
-          {revealed ? <EyeOff size={16} strokeWidth={1.75} aria-hidden="true" /> : <Eye size={16} strokeWidth={1.75} aria-hidden="true" />}
-        </IconButton>
-        <IconButton label="Copiar la dirección" onClick={copyAddress}>
-          <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
-        </IconButton>
-      </div>
       {onPlay && (
         <Button variant="secondary" onClick={onPlay} disabled={server.state === 'offline'}>Jugar en el servidor</Button>
       )}
