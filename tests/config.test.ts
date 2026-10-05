@@ -6,6 +6,7 @@ const env = {
   ORVIAN_MANIFEST_URL: 'http://127.0.0.1:9999/manifest.json',
   ORVIAN_PACK_REPO: 'someone/staging-pack',
   ORVIAN_SERVER: 'mc.example.test:25570',
+  ORVIAN_SPLASH_MS: '300',
   VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173'
 }
 
@@ -17,6 +18,7 @@ describe('loadConfig', () => {
     expect(config.devServerUrl).toBeUndefined()
     expect(config.packRepo).toBe('zzyren/orvianmodpack')
     expect(config.server.address).toBe('payo.exaroton.me')
+    expect(config.minSplashMs).toBe(5000)
   })
 
   it('applies overrides when running unpackaged', () => {
@@ -26,6 +28,7 @@ describe('loadConfig', () => {
       manifestUrl: 'http://127.0.0.1:9999/manifest.json',
       packRepo: 'someone/staging-pack',
       devServerUrl: 'http://127.0.0.1:5173',
+      minSplashMs: 300,
       server: { address: 'mc.example.test', port: 25570 }
     })
   })

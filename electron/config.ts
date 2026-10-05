@@ -46,6 +46,7 @@ export function loadConfig(isPackaged: boolean, env: NodeJS.ProcessEnv = process
   if (env.ORVIAN_DATA_DIR) config.dataDir = env.ORVIAN_DATA_DIR
   if (env.ORVIAN_MANIFEST_URL?.startsWith('http')) config.manifestUrl = env.ORVIAN_MANIFEST_URL
   if (env.ORVIAN_PACK_REPO && REPO_PATTERN.test(env.ORVIAN_PACK_REPO)) config.packRepo = env.ORVIAN_PACK_REPO
+  if (env.ORVIAN_SPLASH_MS && /^\d{1,5}$/.test(env.ORVIAN_SPLASH_MS)) config.minSplashMs = Number(env.ORVIAN_SPLASH_MS)
   if (env.ORVIAN_SERVER) config.server = parseServer(env.ORVIAN_SERVER) ?? config.server
   if (env.VITE_DEV_SERVER_URL) config.devServerUrl = env.VITE_DEV_SERVER_URL
   return config
