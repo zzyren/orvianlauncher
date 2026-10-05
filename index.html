@@ -3,14 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Production CSP. Vite swaps it for a dev variant when serving (see vite.config.ts).
-         fonts.googleapis.com / fonts.gstatic.com are temporary until Outfit is self-hosted. -->
+    <!-- Production CSP. Vite swaps it for a dev variant when serving (see vite.config.ts). -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https://cdn.modrinth.com https://docs.modrinth.com https://*.forgecdn.net https://minotar.net; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: https://cdn.modrinth.com https://*.forgecdn.net https://minotar.net; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
-    <meta name="theme-color" content="#0a0c0d" />
-    <link rel="icon" type="image/png" href="./logo.png" />
+    <meta name="theme-color" content="#0a0e13" />
+    <link rel="icon" type="image/png" href="./logo-64.png" />
     <title>Orvian Launcher</title>
   </head>
   <body>

@@ -96,7 +96,7 @@ export function createMainWindow(options: { shouldHideOnClose: () => boolean }):
     height: 900,
     minWidth: 1120,
     minHeight: 720,
-    backgroundColor: '#090b0c',
+    backgroundColor: '#0a0e13',
     title: 'Orvian Launcher',
     frame: false,
     show: false,
@@ -159,6 +159,14 @@ export function positionTrayWindow(trayWindow: BrowserWindow, tray: Tray): void 
   trayWindow.setPosition(x, y, false)
 }
 
+/** Shows what the launcher is really doing on the splash screen. Never throws: the splash is cosmetic. */
+export function setSplashStatus(splash: BrowserWindow | null, label: string, fraction: number): void {
+  if (!splash || splash.isDestroyed()) return
+  splash.webContents
+    .executeJavaScript(`window.setSplash && window.setSplash(${JSON.stringify(label)}, ${Number(fraction)})`)
+    .catch((err: unknown) => log.debug('[windows] No se pudo actualizar la splash: %s', String(err)))
+}
+
 export function createSplashWindow(): BrowserWindow | null {
   const splashPath = join(assetDir(), 'splash.html')
   if (!existsSync(splashPath)) {
@@ -168,7 +176,7 @@ export function createSplashWindow(): BrowserWindow | null {
   const splash = new BrowserWindow({
     width: 380,
     height: 480,
-    backgroundColor: '#07090b',
+    backgroundColor: '#0a0e13',
     frame: false,
     alwaysOnTop: true,
     resizable: false,
