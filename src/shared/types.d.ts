@@ -27,7 +27,7 @@ declare global {
         message: string
       }>
       repair(): Promise<{ ok: boolean; message: string }>
-      play(): Promise<{ ok: boolean; message: string }>
+      play(options?: { quickPlay?: boolean; playInstalled?: boolean }): Promise<{ ok: boolean; message: string }>
       login(): Promise<{ ok: boolean; message: string }>
       /** Closes the Microsoft sign-in window if one is open. */
       cancelLogin(): Promise<{ ok: boolean }>

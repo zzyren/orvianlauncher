@@ -51,6 +51,16 @@ export class RotatingFile {
     this.open()
   }
 
+  /** Begins a new file for a new session: the previous one becomes `name.1.log`. */
+  startFresh(): void {
+    try {
+      if (this.fd === null) this.open()
+      if (this.size > 0) this.rotate()
+    } catch {
+      this.fd = null
+    }
+  }
+
   write(text: string): void {
     try {
       if (this.fd === null) this.open()

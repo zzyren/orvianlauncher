@@ -2,6 +2,7 @@ import { redactSecrets } from './redact'
 
 export type OrvianErrorCode =
   | 'NETWORK_OFFLINE'
+  | 'OFFLINE_NOT_INSTALLED'
   | 'DOWNLOAD_FAILED'
   | 'HASH_MISMATCH'
   | 'DOWNLOAD_UNVERIFIABLE'
@@ -85,6 +86,11 @@ const CATALOG: Record<OrvianErrorCode, CatalogEntry> = {
     title: 'Sin conexión',
     body: 'Comprueba tu conexión a Internet. Si ya tienes Orvian instalado puedes jugar sin conexión.',
     actions: ['retry', 'play-offline']
+  },
+  OFFLINE_NOT_INSTALLED: {
+    title: 'Orvian no está instalado',
+    body: 'Necesitas conexión a Internet para instalar el modpack la primera vez. Conéctate y vuelve a intentarlo.',
+    actions: ['retry']
   },
   DOWNLOAD_FAILED: {
     title: 'No se pudo descargar {file|el archivo}',

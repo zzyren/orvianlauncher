@@ -20,7 +20,6 @@
   },
   "dependencies": {
     "@xmcl/core": "^2.16.2",
-    "@xmcl/installer": "^6.3.4",
     "@xmcl/user": "^4.4.2",
     "electron-updater": "^6.6.2",
     "lucide-react": "^0.468.0",

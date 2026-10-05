@@ -2,55 +2,19 @@ import { app, shell, BrowserWindow, Notification, session } from 'electron'
 import { z } from 'zod'
 import { join, resolve, sep } from 'node:path'
 import { readFile, writeFile } from 'node:fs/promises'
-import type { ChildProcess } from 'node:child_process'
-import { execSync } from 'node:child_process'
 import { safePackPath, OrvianManifest, ManifestSchema } from '../src/shared/manifest'
 import { userMessage } from '../src/shared/errors'
-import { forgeVersionId, getConfig, isAdminUuid } from './config'
+import { getConfig, isAdminUuid } from './config'
 import type { Ipc } from './ipc'
 import { log } from './logger'
 import { fetchWithTimeout } from './net'
 import { AuthService } from './auth'
-import { ensureJava17 } from './java'
-import { ensureMinecraftVanilla, ensureForge, ensureDependencies, syncModpack } from './minecraft'
-import { Version, launch, createMinecraftProcessWatcher } from '@xmcl/core'
+import { isGameBusy, isMinecraftRunning, killMinecraftProcess, playGame, repairGame, type GameDeps } from './game/launch'
 import { registerAdminIpc } from './admin'
 import { resetLauncherData } from './reset'
 import os from 'node:os'
 
-let isPlaying = false
-let activeMinecraftProcess: ChildProcess | null = null
-/** Mutex: previene que game:play se ejecute en paralelo si el usuario pulsa múltiples veces */
-let isBusy = false
-/** Flag de reparación: fuerza full-verify en el próximo sync */
-let forceRepairNextPlay = false
-
-export function isMinecraftRunning(): boolean {
-  return isPlaying || activeMinecraftProcess !== null
-}
-
-export function killMinecraftProcess(): void {
-  if (activeMinecraftProcess) {
-    const pid = activeMinecraftProcess.pid
-    if (pid) {
-      if (process.platform === 'win32') {
-        try {
-          execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' })
-        } catch {
-          // Taskkill might throw if process already exited
-        }
-      }
-    }
-    try {
-      activeMinecraftProcess.kill('SIGKILL')
-    } catch {
-      // Ignore
-    }
-    activeMinecraftProcess = null
-  }
-  isPlaying = false
-  isBusy = false
-}
+export { isMinecraftRunning, killMinecraftProcess }
 
 let inMemoryManifest: { manifest: OrvianManifest; timestamp: number } | null = null
 // 1 minuto de caché en memoria para el manifest
@@ -204,7 +168,7 @@ export function registerLauncherIpc(ipc: Ipc, dataRoot: string) {
   let lastKnownInstalled: string | null = null
 
   const checkModpackUpdate = async (force = false) => {
-    if (isPlaying) return // No notificar si el usuario está jugando
+    if (isMinecraftRunning()) return // Don't notify while the user is playing
     try {
       const manifest = await getOrvianManifest(dataRoot, force)
       if (!manifest) return
@@ -324,171 +288,34 @@ export function registerLauncherIpc(ipc: Ipc, dataRoot: string) {
     }
   })
   
-  ipc.handle('pack:repair', [], async () => {
-    forceRepairNextPlay = true
-    return { ok: true, message: 'La reparación profunda se ejecutará ahora al iniciar el juego.' }
-  })
-
-  ipc.handle('game:play', [], async (event) => {
-    // ── Mutex: previene ejecuciones paralelas ───────────────────────────────────
-    if (isPlaying) return { ok: false, message: 'Minecraft ya está en ejecución.' }
-    if (isBusy) return { ok: false, message: 'El launcher ya está realizando una operación. Espera a que termine.' }
-    isBusy = true
-    
-    try {
-      if (!(await authService.loadAccount())) throw new Error('Inicia sesión en tu cuenta de Microsoft antes de jugar.')
-      // Renews the Minecraft token silently when it is about to expire; offline it falls back to the stored one.
-      const { account, stale } = await authService.getValidSession()
-      if (stale) log.warn('[Launcher] Se usará la sesión guardada sin renovar: el multijugador puede fallar.')
-
-      // Detectar estado local primero por si estamos offline
-      const statePath = join(instance, '.orvian', 'official-state.json')
-      const localState = await readJson<{ version: string; files?: Record<string, string> }>(statePath, { version: '' })
-      const installedVersion = localState.version || null
-
-      const manifest = await getOrvianManifest(dataRoot)
-      
-      // Comportamiento Offline
-      if (!manifest) {
-        if (!installedVersion) {
-          throw new Error('No hay conexión a Internet y el modpack no está instalado en este equipo. Conéctate para instalarlo por primera vez.')
-        }
-        log.warn(`[Launcher] Modo Offline activo. Usando la versión instalada localmente (v${installedVersion}).`)
-        // Emular un manifest básico para poder arrancar
-        // getOrvianManifest ya devuelve null si TODO falla, por lo que aquí forzamos el juego
-      }
-
-      // Si no hay manifest y sí hay instalación, procedemos asumiendo que está OK.
-      // Si hay manifest, verificamos todo normal.
-      const requiredVersion = manifest ? manifest.pack.version : installedVersion!
-      const manifestFiles = manifest ? manifest.files : []
-
-      const settings = await readJson(join(dataRoot, 'launcher', 'config.json'), { ramGb: 6 })
-
-      emitProgress(event, 'java', 0.1, 'Preparando Java 17...')
-      const javaPath = await ensureJava17(dataRoot, (detail) => emitProgress(event, 'java', 0.2, detail))
-
-      emitProgress(event, 'minecraft', 0.3, 'Verificando Minecraft 1.20.1...')
-      await ensureMinecraftVanilla(common, (detail) => emitProgress(event, 'minecraft', 0.4, detail))
-
-      emitProgress(event, 'forge', 0.5, 'Verificando Forge 47.4.23...')
-      await ensureForge(common, javaPath, (detail) => emitProgress(event, 'forge', 0.6, detail))
-
-      emitProgress(event, 'deps', 0.65, 'Verificando dependencias...')
-      await ensureDependencies(common, (detail) => emitProgress(event, 'deps', 0.68, detail))
-
-      // ── Determinar estado del modpack ANTES de sincronizar ────────────────────
-      log.info(`[Launcher] Versión del modpack instalada: ${installedVersion ?? 'no instalado'}`)
-      log.info(`[Launcher] Versión del modpack requerida: ${requiredVersion}`)
-
-      const isFirstInstall = !installedVersion
-      const needsUpdate = installedVersion !== null && installedVersion !== requiredVersion
-      const alreadyCurrent = installedVersion === requiredVersion && installedVersion !== null
-
-      log.info(`[Launcher] Primera instalación: ${isFirstInstall}`)
-      log.info(`[Launcher] Actualización requerida: ${needsUpdate}`)
-      log.info(`[Launcher] Ya actualizado: ${alreadyCurrent}`)
-
-      const isRepair = forceRepairNextPlay
-      forceRepairNextPlay = false
-
-      if (isRepair) {
-        emitProgress(event, 'pack', 0.7, `Reparando modpack v${requiredVersion}... (Verificación profunda)`)
-        log.info(`[Launcher] Ejecutando REPARACIÓN PROFUNDA (SHA-256 forzado)...`)
-      } else if (isFirstInstall) {
-        emitProgress(event, 'pack', 0.7, 'Instalando modpack Orvian por primera vez...')
-      } else if (needsUpdate) {
-        emitProgress(event, 'pack', 0.7, `Actualizando modpack: v${installedVersion} → v${requiredVersion}...`)
-        log.info(`[Launcher] Actualizando modpack: v${installedVersion} → v${requiredVersion}`)
-      } else {
-        emitProgress(event, 'pack', 0.7, `Verificando modpack v${requiredVersion}...`)
-        log.info(`[Launcher] Verificando integridad del modpack v${requiredVersion}...`)
-      }
-
-      // Sincronizar (si estamos offline y ya estaba instalado, no habrá manifestFiles y pasará rápido,
-      // a menos que algo se haya corrompido, en cuyo caso intentará descargar y fallará).
-      const syncResult = await syncModpack(
-        instance,
-        manifestFiles,
-        requiredVersion,
-        (detail) => emitProgress(event, 'pack', 0.8, detail),
-        { forceVerify: isRepair }
-      )
-
-      // Mensaje post-sync para el usuario
-      const noDownload = syncResult.installed === 0 && syncResult.replaced === 0
-      if (noDownload) {
-        log.info(`[Launcher] No se descargó nada — modpack v${requiredVersion} listo para jugar.`)
-      }
-
-      // Actualizar tracking de versiones tras la sincronización
-      lastKnownInstalled = requiredVersion
-      lastKnownLatest = requiredVersion
-      broadcastModpackStatus(requiredVersion, requiredVersion)
-
-      emitProgress(event, 'launching', 0.9, 'Resolviendo entorno de ejecución...')
-      const resolvedVersion = await Version.parse(common, forgeVersionId())
-
-      emitProgress(event, 'launching', 0.95, 'Iniciando juego...')
-      isPlaying = true
-      
-      const proc = await launch({
-        gamePath: instance,
-        resourcePath: common,
-        javaPath,
-        version: resolvedVersion,
-        minMemory: 1024,
-        maxMemory: settings.ramGb * 1024,
-        gameProfile: {
-          id: account.uuid,
-          name: account.name
-        },
-        accessToken: account.accessToken,
-        // userType is left unset on purpose: @xmcl/core then sends `msa`, which is what Microsoft accounts use.
-        launcherName: 'Orvian',
-        launcherBrand: app.getVersion()
+  const gameDeps: GameDeps = {
+    dataRoot,
+    appVersion: app.getVersion(),
+    hasAccount: async () => (await authService.loadAccount()) !== null,
+    getSession: () => authService.getValidSession(),
+    getManifest: () => getOrvianManifest(dataRoot),
+    getRamGb: async () => (await readJson(join(dataRoot, 'launcher', 'config.json'), { ramGb: 6 })).ramGb,
+    emit: (event) => {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed()) win.webContents.send('launcher:progress', event)
       })
+    },
+    onPackSynced: (version) => {
+      lastKnownInstalled = version
+      lastKnownLatest = version
+      broadcastModpackStatus(version, version)
+    },
+    // Re-check for a newer pack after a session: updates may have been published while playing
+    onGameExit: () => void checkModpackUpdate(true)
+  }
 
-      activeMinecraftProcess = proc
+  ipc.handle('pack:repair', [], () => repairGame(gameDeps))
 
-      proc.on('exit', () => {
-        activeMinecraftProcess = null
-        isPlaying = false
-      })
-
-      proc.on('error', () => {
-        activeMinecraftProcess = null
-        isPlaying = false
-      })
-
-      const watcher = createMinecraftProcessWatcher(proc)
-      watcher.on('minecraft-window-ready', () => {
-        emitProgress(event, 'playing', 1, '¡Jugando!')
-      })
-      
-      watcher.on('minecraft-exit', ({ code }) => {
-        activeMinecraftProcess = null
-        isPlaying = false
-        emitProgress(event, 'idle', 0, `Minecraft se ha cerrado.`)
-        // Forzar refresh de estado tras cerrar Minecraft por si hay nuevas versiones
-        void checkModpackUpdate(true)
-      })
-      
-      return { ok: true, message: 'Minecraft ha iniciado correctamente.' }
-    } catch (error) {
-      activeMinecraftProcess = null
-      isPlaying = false
-      isBusy = false
-      const msg = userMessage(error)
-      log.error('[Launcher] Error al iniciar Minecraft: %s', error instanceof Error ? (error.stack ?? msg) : msg)
-      return { ok: false, message: msg }
-    } finally {
-      // El mutex se libera cuando termina de arrancar Minecraft (o si hay error).
-      // Una vez que el proceso Minecraft está corriendo, isBusy se vuelve false
-      // para que el usuario pueda pulsar "Reparar" etc. sin reiniciar.
-      isBusy = false
-    }
-  })
+  ipc.handle(
+    'game:play',
+    [z.object({ quickPlay: z.boolean().optional(), playInstalled: z.boolean().optional() }).optional()],
+    (_event, options) => playGame(gameDeps, options ?? {})
+  )
 
   ipc.handle('account:login', [], async (event) => {
     try {
@@ -543,7 +370,7 @@ export function registerLauncherIpc(ipc: Ipc, dataRoot: string) {
   })
 
   ipc.handle('launcher:reset', [z.object({ deleteWorlds: z.boolean() })], async (_event, options) => {
-    if (isPlaying || isBusy) {
+    if (isMinecraftRunning() || isGameBusy()) {
       throw new Error('No puedes restablecer el launcher mientras haya una partida o una instalación en curso.')
     }
 
