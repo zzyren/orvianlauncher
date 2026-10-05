@@ -19,13 +19,33 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
+
+      - name: Tag must match package.json
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "El tag ${{ github.ref_name }} no coincide con la versión de package.json (v$version)."
+          }
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and publish to GitHub Releases
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      # electron-builder creates the GitHub release as a draft (build.publish.releaseType).
+      # It becomes visible to players, and to auto-update, only when it is published by hand
+      # after the smoke test described in RELEASING.md.
+      - name: Build installer and upload to a draft release
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npm run dist:win:publish

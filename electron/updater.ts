@@ -1,132 +1,106 @@
 import { autoUpdater } from 'electron-updater'
-import type { IpcMain, BrowserWindow } from 'electron'
 import { app } from 'electron'
+import type { UpdaterState } from '../src/shared/launcher-state'
+import { getConfig } from './config'
+import type { Ipc } from './ipc'
+import { log } from './logger'
 
-// ─── Tipos de eventos que se envian al renderer ───────────────────────────────
+/**
+ * Self-update of the launcher through electron-updater. The windows never talk to it directly:
+ * its state is reported to the launcher store (`bindUpdater`) and shown in the status bar.
+ */
 
-export type UpdaterEvent =
-  | { type: 'checking' }
-  | { type: 'not-available'; currentVersion: string }
-  | { type: 'available'; currentVersion: string; newVersion: string; releaseNotes?: string }
-  | { type: 'downloading'; percent: number; bytesPerSecond: number; transferred: number; total: number }
-  | { type: 'downloaded'; newVersion: string }
-  | { type: 'error'; message: string }
-
-// ─── Canal IPC publico ────────────────────────────────────────────────────────
-
-export const IPC_UPDATER_EVENT = 'updater:event'
-
-// ─── Estado interno ───────────────────────────────────────────────────────────
-
-let activeWindow: BrowserWindow | null = null
-/** Versión que ya fue descargada. Evita bucles de re-descarga. */
-let downloadedVersion: string | null = null
-/** Flag para evitar múltiples comprobaciones en paralelo */
-let isChecking = false
-
-function send(event: UpdaterEvent) {
-  if (activeWindow && !activeWindow.isDestroyed()) {
-    activeWindow.webContents.send(IPC_UPDATER_EVENT, event)
-  }
+export interface UpdaterHooks {
+  /** Receives every change of the launcher-update state. */
+  onState: (state: UpdaterState) => void
+  isGameRunning: () => boolean
 }
 
-// ─── Configuracion de electron-updater ───────────────────────────────────────
+let hooks: UpdaterHooks | null = null
+let current: UpdaterState = { status: 'idle', currentVersion: '' }
+/** Version already downloaded; avoids announcing it again. */
+let downloadedVersion: string | null = null
+let isChecking = false
 
-export function configureAutoUpdater() {
-  // No mostrar dialogos nativos — nosotros controlamos la UI
+/** Connects the updater to the rest of the launcher; call once before the first update check. */
+export function bindUpdater(value: UpdaterHooks): void {
+  hooks = value
+  current = { ...current, currentVersion: app.getVersion() }
+  value.onState(current)
+}
+
+export function getUpdaterState(): UpdaterState {
+  return current
+}
+
+function setState(next: Omit<UpdaterState, 'currentVersion'>): void {
+  current = { ...next, currentVersion: app.getVersion() }
+  hooks?.onState(current)
+}
+
+/** Messages that only mean "there is no real updater here" (development builds, missing feed). */
+const ENVIRONMENT_ERRORS = ['net::ERR_', 'dev mode', 'ENOENT', 'Cannot find module']
+
+export function configureAutoUpdater(): void {
+  // The launcher draws its own UI: no native dialogs and no download without the player's consent
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
-
-  // Forzar canal stable para no coger pre-releases accidentalmente
+  // Stable channel only, never a pre-release by accident
   autoUpdater.channel = 'latest'
   autoUpdater.allowDowngrade = false
   autoUpdater.allowPrerelease = false
 
-  // ─── Eventos de electron-updater ─────────────────────────────────────────
-
   autoUpdater.on('checking-for-update', () => {
-    console.log('[Updater] Comprobando actualizaciones del launcher...')
-    send({ type: 'checking' })
+    log.info('[Updater] Comprobando actualizaciones del launcher...')
+    // A background check must not flicker the UI of a state that is already past it
+    if (current.status === 'idle' || current.status === 'error') setState({ status: 'checking' })
   })
 
   autoUpdater.on('update-available', (info) => {
-    console.log(`[Updater] Actualizacion del launcher disponible: v${info.version}`)
-    // Anti-bucle: si ya descargamos esta versión, no volver a anunciarla
+    log.info('[Updater] Actualización del launcher disponible: v%s', info.version)
     if (downloadedVersion === info.version) {
-      console.log('[Updater] Esta version ya fue descargada. Ignorando evento duplicado.')
+      log.info('[Updater] Esa versión ya está descargada; se ignora el aviso duplicado.')
       return
     }
-    const releaseNotes = typeof info.releaseNotes === 'string'
-      ? info.releaseNotes
-      : Array.isArray(info.releaseNotes)
-        ? (info.releaseNotes as Array<{ note?: string; version?: string }>)
-            .map((n) => n.note ?? '')
-            .filter(Boolean)
-            .join('\n')
-        : undefined
-    send({
-      type: 'available',
-      currentVersion: app.getVersion(),
-      newVersion: info.version,
-      releaseNotes
-    })
+    setState({ status: 'available', newVersion: info.version })
   })
 
-  autoUpdater.on('update-not-available', (_info) => {
-    console.log('[Updater] El launcher ya esta en la ultima version.')
-    send({ type: 'not-available', currentVersion: app.getVersion() })
+  autoUpdater.on('update-not-available', () => {
+    log.info('[Updater] El launcher ya está en la última versión.')
+    if (current.status === 'checking') setState({ status: 'idle' })
     isChecking = false
   })
 
   autoUpdater.on('download-progress', (progress) => {
-    send({
-      type: 'downloading',
-      percent: Math.round(progress.percent),
-      bytesPerSecond: Math.round(progress.bytesPerSecond),
-      transferred: progress.transferred,
-      total: progress.total
-    })
+    setState({ status: 'downloading', newVersion: current.newVersion, percent: Math.round(progress.percent), bytesPerSecond: Math.round(progress.bytesPerSecond) })
   })
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log(`[Updater] Actualizacion del launcher descargada: v${info.version}`)
+    log.info('[Updater] Actualización del launcher descargada: v%s', info.version)
     downloadedVersion = info.version
     isChecking = false
-    send({ type: 'downloaded', newVersion: info.version })
+    // Once downloaded it installs when the launcher is closed normally, even if restart is never pressed
+    autoUpdater.autoInstallOnAppQuit = true
+    setState({ status: 'downloaded', newVersion: info.version })
   })
 
   autoUpdater.on('error', (err) => {
-    const msg = err?.message ?? String(err)
-    console.warn('[Updater] Error (no critico):', msg)
+    const message = err?.message ?? String(err)
+    log.warn('[Updater] Error (no crítico): %s', message)
     isChecking = false
-    // Solo enviar si no es un error de entorno de desarrollo o de configuración missing
-    const ignoredMessages = [
-      'net::ERR_',
-      'dev mode',
-      'ENOENT',
-      'Cannot find module'
-    ]
-    if (!ignoredMessages.some(s => msg.includes(s))) {
-      send({ type: 'error', message: msg })
+    if (current.status === 'downloaded') return
+    if (ENVIRONMENT_ERRORS.some((fragment) => message.includes(fragment))) {
+      if (current.status !== 'idle') setState({ status: 'idle' })
+      return
     }
+    setState({ status: 'error', newVersion: current.newVersion, message })
   })
 }
 
-// ─── Registro de handlers IPC ─────────────────────────────────────────────────
-
-export function registerUpdaterIpc(ipcMain: IpcMain, getMainWindow: () => BrowserWindow | null) {
-  function refreshWindow() {
-    const win = getMainWindow()
-    if (win && !win.isDestroyed()) {
-      activeWindow = win
-    }
-  }
-
-  // Comprobar actualizaciones del launcher bajo demanda
-  ipcMain.handle('updater:check', async () => {
-    refreshWindow()
+export function registerUpdaterIpc(ipc: Ipc): void {
+  ipc.handle('updater:check', [], async () => {
     if (isChecking) {
-      console.log('[Updater] Comprobacion ya en curso, ignorando peticion duplicada.')
+      log.info('[Updater] Comprobación ya en curso; se ignora la petición duplicada.')
       return { ok: true }
     }
     isChecking = true
@@ -134,68 +108,52 @@ export function registerUpdaterIpc(ipcMain: IpcMain, getMainWindow: () => Browse
       await autoUpdater.checkForUpdates()
       return { ok: true }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.warn('[Updater] checkForUpdates fallo:', msg)
+      const message = err instanceof Error ? err.message : String(err)
+      log.warn('[Updater] checkForUpdates falló: %s', message)
       isChecking = false
-      return { ok: false, message: msg }
+      return { ok: false, message }
     }
   })
 
-  // Iniciar descarga del launcher
-  ipcMain.handle('updater:download', async () => {
-    refreshWindow()
+  ipc.handle('updater:download', [], async () => {
     try {
       await autoUpdater.downloadUpdate()
       return { ok: true }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.warn('[Updater] downloadUpdate fallo:', msg)
-      return { ok: false, message: msg }
+      const message = err instanceof Error ? err.message : String(err)
+      log.warn('[Updater] downloadUpdate falló: %s', message)
+      return { ok: false, message }
     }
   })
 
-  // Instalar y reiniciar
-  ipcMain.handle('updater:install', () => {
+  ipc.handle('updater:install', [], () => {
+    // quitAndInstall quits the launcher, which would kill a running game without warning
+    if (hooks?.isGameRunning()) {
+      throw new Error('Minecraft está abierto. La actualización se instalará cuando cierres el launcher.')
+    }
     try {
-      // isSilent=false para mostrar el instalador NSIS visualmente,
-      // isForceRunAfter=true para que el launcher se abra después de instalar
+      // Visible installer (isSilent=false) and relaunch afterwards (isForceRunAfter=true)
       autoUpdater.quitAndInstall(false, true)
     } catch (err) {
-      console.error('[Updater] quitAndInstall fallo:', err)
+      log.error('[Updater] quitAndInstall falló: %s', String(err))
     }
-  })
-
-  // Obtener version actual del ejecutable
-  ipcMain.handle('updater:get-version', () => {
-    return app.getVersion()
   })
 }
 
-// ─── Comprobacion automatica al iniciar ──────────────────────────────────────
-
-export function scheduleUpdateCheck(delay = 8000) {
-  // Solo en produccion — en dev no hay actualizador real
-  if (process.env.VITE_DEV_SERVER_URL) {
-    console.log('[Updater] Modo desarrollo — comprobacion de actualizaciones desactivada.')
+/** Background check shortly after start; skipped in development, where there is no real feed. */
+export function scheduleUpdateCheck(delay = 8000): void {
+  if (getConfig().devServerUrl) {
+    log.info('[Updater] Modo desarrollo: comprobación de actualizaciones desactivada.')
     return
   }
   if (isChecking) return
 
-  setTimeout(async () => {
+  setTimeout(() => {
     if (isChecking) return
     isChecking = true
-    try {
-      await autoUpdater.checkForUpdates()
-    } catch (err) {
-      console.warn('[Updater] Comprobacion automatica fallida (no critico):', err)
+    autoUpdater.checkForUpdates().catch((err: unknown) => {
+      log.warn('[Updater] Comprobación automática fallida (no crítico): %s', String(err))
       isChecking = false
-    }
+    })
   }, delay)
-}
-
-// ─── Exponer setActiveWindow para que main.ts pueda actualizar cuando la ventana esté lista ──
-export function setUpdaterWindow(win: BrowserWindow | null) {
-  if (win && !win.isDestroyed()) {
-    activeWindow = win
-  }
 }

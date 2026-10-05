@@ -53,6 +53,15 @@ export interface SyncOptions {
   forceVerify?: boolean
 }
 
+/** Present while a sync is writing files; left behind, it means the instance may be half updated. */
+export function syncMarkerPath(root: string): string {
+  return join(root, '.orvian', 'sync.marker')
+}
+
+export async function hasInterruptedSync(root: string): Promise<boolean> {
+  return fileExists(syncMarkerPath(root))
+}
+
 /**
  * FAST-PATH (comportamiento normal, forceVerify=false):
  *   Si official-state.json ya registra la misma versión del manifiesto
@@ -79,7 +88,17 @@ export async function synchronizeOfficialFiles(
   const result: SyncResult = { installed: 0, replaced: 0, preservedConfigs: 0, stagedDefaults: 0, unchanged: 0, trustedFromState: 0 }
   const nextHashes = { ...state.files }
 
-  const forceVerify = opts?.forceVerify ?? false
+  // A marker left by an interrupted run means some files may be from the new version and some
+  // from the old one, whatever the state file says: verify everything.
+  const markerPath = syncMarkerPath(root)
+  const interrupted = await fileExists(markerPath)
+  const forceVerify = (opts?.forceVerify ?? false) || interrupted
+  let markerWritten = interrupted
+  const beginWrites = async (): Promise<void> => {
+    if (markerWritten) return
+    await writeJsonAtomically(markerPath, { target: version, startedAt: Date.now() })
+    markerWritten = true
+  }
 
   // ── Fast-path guard: ¿la versión instalada coincide con la solicitada?
   // Si es así, podemos confiar en el state file para archivos que ya tienen
@@ -101,8 +120,9 @@ export async function synchronizeOfficialFiles(
     // Si el archivo NO existe en disco (borrado manualmente, etc.),
     // el fast-path falla y se cae al full-verify/download normal.
     if (versionMatch && state.files[file.path] === file.sha256) {
-      const exists = await fileExists(target)
-      if (exists) {
+      // The size check is nearly free and catches a truncated or swapped file that a bare
+      // existence check would let through.
+      if ((await fileSize(target)) === file.size) {
         result.trustedFromState++
         // nextHashes ya tiene el valor correcto desde { ...state.files }
         continue
@@ -124,6 +144,7 @@ export async function synchronizeOfficialFiles(
       continue
     }
     const bytes = await fetchBytes(file)
+    await beginWrites()
     if (decision === 'stage-new-default') {
       const stagedPath = `.orvian/pending-config/${version}/${file.path}`
       await installVerifiedFile(root, { ...file, path: stagedPath }, bytes)
@@ -143,13 +164,9 @@ export async function synchronizeOfficialFiles(
     const incomingPaths = new Set(files.map((f) => f.path))
     for (const oldPath of Object.keys(state.files)) {
       if (!incomingPaths.has(oldPath)) {
-        if (
-          oldPath.startsWith('mods/') ||
-          oldPath.startsWith('defaultconfigs/') ||
-          oldPath.startsWith('shaderpacks/') ||
-          oldPath.startsWith('resourcepacks/')
-        ) {
+        if (REMOVABLE_PREFIXES.some((prefix) => oldPath.startsWith(prefix))) {
           const oldTarget = join(root, ...oldPath.split('/'))
+          await beginWrites()
           await rm(oldTarget, { force: true }).catch(() => {})
           delete nextHashes[oldPath]
         }
@@ -158,18 +175,67 @@ export async function synchronizeOfficialFiles(
   }
 
   await writeJsonAtomically(statePath, { version, files: nextHashes } satisfies OfficialState)
+  // Only now is the instance consistent with `version`.
+  await rm(markerPath, { force: true })
   return result
 }
 
+export interface UpdatePlan {
+  install: number
+  replace: number
+  unchanged: number
+  remove: number
+  /** Estimated bytes that would be downloaded; exact for pack files, approximate for user-editable configs. */
+  bytesToDownload: number
+}
+
+/**
+ * Dry run of what updating to `files` would do, without hashing anything: a file counts as
+ * unchanged when the last official hash matches and its size is right. Used to tell the player
+ * how big an update is before they press the button.
+ */
+export async function planUpdate(root: string, files: PackFile[]): Promise<UpdatePlan> {
+  const state = await readJson<OfficialState>(join(root, '.orvian', 'official-state.json'), { version: '', files: {} })
+  const plan: UpdatePlan = { install: 0, replace: 0, unchanged: 0, remove: 0, bytesToDownload: 0 }
+  for (const file of files) {
+    if (!safePackPath(file.path)) continue
+    const size = await fileSize(join(root, ...file.path.split('/')))
+    if (size === undefined) {
+      plan.install++
+      plan.bytesToDownload += file.size
+    } else if (state.files[file.path] === file.sha256 && size === file.size) {
+      plan.unchanged++
+    } else {
+      plan.replace++
+      plan.bytesToDownload += file.size
+    }
+  }
+  const incoming = new Set(files.map((f) => f.path))
+  plan.remove = Object.keys(state.files).filter((p) => !incoming.has(p) && REMOVABLE_PREFIXES.some((prefix) => p.startsWith(prefix))).length
+  return plan
+}
+
+/** Official files in these folders are removed when a newer pack no longer ships them. */
+const REMOVABLE_PREFIXES = ['mods/', 'defaultconfigs/', 'shaderpacks/', 'resourcepacks/']
+
+async function fileSize(path: string): Promise<number | undefined> {
+  try {
+    const info = await stat(path)
+    return info.isFile() ? info.size : undefined
+  } catch {
+    return undefined
+  }
+}
+
 async function fileExists(path: string): Promise<boolean> {
-  try { return (await stat(path)).isFile() } catch { return false }
+  return (await fileSize(path)) !== undefined
 }
 
 async function readJson<T>(path: string, fallback: T): Promise<T> {
   try { return JSON.parse(await readFile(path, 'utf8')) as T } catch { return fallback }
 }
 
-async function writeJsonAtomically(path: string, value: unknown): Promise<void> {
+export async function writeJsonAtomically(path: string, value: unknown): Promise<void> {
   const { mkdir, writeFile } = await import('node:fs/promises')
   await mkdir(dirname(path), { recursive: true })
   const temporary = `${path}.tmp`
