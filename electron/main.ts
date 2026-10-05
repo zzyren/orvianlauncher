@@ -26,7 +26,12 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('com.orvian.launcher')
 }
 Menu.setApplicationMenu(null)
-initConfig(app.isPackaged)
+/**
+ * `app.isPackaged` is also true for the dev executable, because scripts/patch-electron-dev.cjs renames it to
+ * Orvian.exe and Electron decides by the executable name. A real build runs from inside its own resources folder.
+ */
+const isPackaged = app.isPackaged && app.getAppPath().startsWith(process.resourcesPath)
+initConfig(isPackaged)
 
 let mainWindow: BrowserWindow | null = null
 let trayWindow: BrowserWindow | null = null
@@ -81,11 +86,11 @@ function start(): void {
   const dataRoot = getConfig().dataDir ?? join(app.getPath('appData'), 'Orvian')
   initLogger({
     dir: join(dataRoot, 'launcher', 'logs'),
-    level: app.isPackaged ? 'info' : 'debug',
-    mirrorConsole: !app.isPackaged
+    level: isPackaged ? 'info' : 'debug',
+    mirrorConsole: !isPackaged
   })
   setUserAgent(`OrvianLauncher/${app.getVersion()}`)
-  log.info('Orvian Launcher %s arrancando (empaquetado: %s)', app.getVersion(), app.isPackaged)
+  log.info('Orvian Launcher %s arrancando (empaquetado: %s)', app.getVersion(), isPackaged)
 
   process.on('unhandledRejection', (reason) => log.error('unhandledRejection: %s', reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)))
   process.on('uncaughtException', (err) => log.error('uncaughtException: %s', err.stack ?? err.message))
