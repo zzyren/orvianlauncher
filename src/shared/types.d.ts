@@ -17,6 +17,8 @@ declare global {
         ramGb: number
         configured: boolean
         isPlaying?: boolean
+        /** The pack information is the last saved copy because GitHub could not be reached. */
+        offline?: boolean
       }>
       /** Fuerza una comprobación de actualización del modpack contra GitHub. */
       checkForUpdates(): Promise<{
@@ -25,6 +27,9 @@ declare global {
         installedVersion: string | null
         latestVersion: string | null
         message: string
+        offline?: boolean
+        /** Estimated download size of the update, when there is one. */
+        downloadBytes?: number
       }>
       repair(): Promise<{ ok: boolean; message: string }>
       play(options?: { quickPlay?: boolean; playInstalled?: boolean }): Promise<{ ok: boolean; message: string }>
@@ -37,7 +42,8 @@ declare global {
       /** Wipes launcher data. Worlds, screenshots, packs and options are kept unless `deleteWorlds` is true. */
       resetInstallation(options?: { deleteWorlds: boolean }): Promise<{ ok: boolean; message: string; preserved: string[] }>
       pickMrpack(): Promise<{ canceled: boolean; selectionId: string | null; fileName: string | null; size: number }>
-      publishUpdate(params: { selectionId: string; version: string; changelog: string; overwrite?: boolean }): Promise<{ ok: boolean; releaseUrl: string; message: string }>
+      /** `minimumLauncher` is carried over from the published manifest unless given; raise it only when the pack needs a newer launcher. */
+      publishUpdate(params: { selectionId: string; version: string; changelog: string; overwrite?: boolean; minimumLauncher?: string }): Promise<{ ok: boolean; releaseUrl: string; message: string }>
       /** The publishing token lives only in the main process; the renderer can never read it back. */
       adminTokenStatus(): Promise<{ hasToken: boolean; canEncrypt: boolean }>
       adminSetToken(token: string): Promise<{ ok: boolean; verified: boolean }>

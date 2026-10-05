@@ -1,144 +1,147 @@
+import { randomUUID } from 'node:crypto'
+import { readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { PackFile } from '../../src/shared/manifest'
-import { synchronizeOfficialFiles, type SyncResult, type SyncOptions } from '../../src/shared/integrity'
+import { open, readAllEntries, readEntry } from '@xmcl/unzip'
+import { OrvianError } from '../../src/shared/errors'
+import { indexArchiveEntries } from '../../src/shared/archive'
+import { planUpdate, synchronizeOfficialFiles, type SyncResult } from '../../src/shared/integrity'
+import type { OrvianManifest, PackFile } from '../../src/shared/manifest'
 import { getConfig } from '../config'
+import type { StepUpdate } from '../game/progress'
 import { log } from '../logger'
+import { download } from '../net'
 
-export async function syncModpack(
-  instanceDir: string, 
-  manifestFiles: PackFile[], 
-  version: string,
-  onProgress: (detail: string) => void,
-  opts?: SyncOptions
-): Promise<SyncResult> {
-  onProgress('Verificando archivos del modpack...')
-  let processed = 0
+type ZipFile = Awaited<ReturnType<typeof open>>
+type Entry = Awaited<ReturnType<typeof readAllEntries>>[number]
 
-  // Limpiar archivos temporales huérfanos de sincronizaciones anteriores interrumpidas
+export interface SyncParams {
+  instanceDir: string
+  manifest: OrvianManifest
+  /** Re-hash every file instead of trusting the state recorded by the last install ("repair"). */
+  fullVerify: boolean
+  onProgress: (update: StepUpdate) => void
+}
+
+/** Folders where an interrupted run can leave `.orvian-tmp` files behind. */
+const TEMP_SWEEP_DIRS = ['mods', 'config', 'defaultconfigs', 'shaderpacks', 'resourcepacks']
+
+/**
+ * Where the pack's archive can be downloaded. A manifest that names it (`archive`) is authoritative;
+ * manifests published before that field existed point every file at `<release>/modpack.zip`, whose
+ * tag was written with or without a leading "v", so both are tried.
+ */
+export function archiveCandidates(manifest: OrvianManifest, repo: string): string[] {
+  if (manifest.archive) return [manifest.archive.url]
+  const version = manifest.pack.version
+  const bare = version.startsWith('v') ? version.slice(1) : version
+  return [`https://github.com/${repo}/releases/download/v${bare}/modpack.zip`, `https://github.com/${repo}/releases/download/${bare}/modpack.zip`]
+}
+
+async function sweepLeftovers(instanceDir: string, keepArchive: string): Promise<void> {
+  for (const dir of TEMP_SWEEP_DIRS) {
+    const entries = await readdir(join(instanceDir, dir), { recursive: true }).catch(() => [] as string[])
+    for (const rel of entries) {
+      if (rel.endsWith('.orvian-tmp')) await rm(join(instanceDir, dir, rel), { force: true }).catch(() => undefined)
+    }
+  }
+  const cacheDir = join(instanceDir, '.orvian', 'cache')
+  for (const name of await readdir(cacheDir).catch(() => [] as string[])) {
+    if (name.endsWith('.part') || (name.startsWith('modpack-') && name.endsWith('.zip') && name !== keepArchive) || name === 'direct') {
+      await rm(join(cacheDir, name), { recursive: true, force: true }).catch(() => undefined)
+    }
+  }
+}
+
+function isStatus(err: unknown, status: number): boolean {
+  return err instanceof OrvianError && err.code === 'DOWNLOAD_FAILED' && err.details.status === status
+}
+
+export async function syncModpack(params: SyncParams): Promise<SyncResult> {
+  const { instanceDir, manifest, fullVerify, onProgress } = params
+  const version = manifest.pack.version
+  const cacheDir = join(instanceDir, '.orvian', 'cache')
+  const archiveName = `modpack-${version}.zip`
+  const archivePath = join(cacheDir, archiveName)
+  const candidates = archiveCandidates(manifest, getConfig().packRepo)
+
+  onProgress({ detail: 'Verificando archivos del modpack...' })
+  await sweepLeftovers(instanceDir, archiveName)
+
+  const expected = fullVerify ? undefined : await planUpdate(instanceDir, manifest.files)
+  const total = expected ? expected.install + expected.replace : undefined
+  let fetched = 0
+
+  let opened: { zip: ZipFile; index: Map<string, Entry> } | null = null
+  let opening: Promise<{ zip: ZipFile; index: Map<string, Entry> }> | null = null
+
+  /** Downloads (once) and opens the archive; every file that lives inside it is read from there. */
+  const openArchive = (): Promise<{ zip: ZipFile; index: Map<string, Entry> }> => {
+    opening ??= (async () => {
+      onProgress({ detail: `Descargando modpack v${version}...` })
+      let lastError: unknown
+      let downloaded = false
+      for (const url of candidates) {
+        try {
+          await download(url, archivePath, {
+            sha256: manifest.archive?.sha256,
+            size: manifest.archive?.size,
+            idleTimeoutMs: 60_000,
+            onProgress: ({ bytesDone, bytesTotal }) => onProgress({ bytesDone, bytesTotal, detail: `Descargando modpack v${version}...` })
+          })
+          downloaded = true
+          break
+        } catch (err) {
+          lastError = err
+          if (!isStatus(err, 404)) throw err
+        }
+      }
+      if (!downloaded) throw new OrvianError('PACK_ARCHIVE_MISSING', { v: version }, { cause: lastError, message: `No existe modpack.zip para la versión ${version}` })
+
+      onProgress({ detail: 'Abriendo modpack.zip...' })
+      let zip: ZipFile | undefined
+      try {
+        zip = await open(archivePath)
+        const entries = await readAllEntries(zip)
+        return (opened = { zip, index: indexArchiveEntries(entries) })
+      } catch (err) {
+        zip?.close()
+        await rm(archivePath, { force: true }).catch(() => undefined)
+        throw new OrvianError('DOWNLOAD_FAILED', { file: 'modpack.zip', reason: 'bad-archive' }, { cause: err, message: 'El modpack.zip descargado no es un ZIP válido.' })
+      }
+    })()
+    return opening
+  }
+
+  const fetchBytes = async (file: PackFile): Promise<Uint8Array> => {
+    let bytes: Uint8Array
+    if (candidates.includes(file.url)) {
+      const { zip, index } = await openArchive()
+      const entry = index.get(file.path) ?? index.get(file.path.toLowerCase())
+      if (!entry) throw new OrvianError('MANIFEST_INVALID', { file: file.path }, { message: `El archivo ${file.path} no se encuentra en el modpack.zip.` })
+      bytes = new Uint8Array(await readEntry(zip, entry))
+    } else {
+      // A file hosted on its own URL (e.g. a mod CDN): verified while it downloads, then handed on.
+      const temp = join(cacheDir, 'direct', randomUUID())
+      try {
+        await download(file.url, temp, { sha256: file.sha256, size: file.size })
+        bytes = new Uint8Array(await readFile(temp))
+      } finally {
+        await rm(temp, { force: true }).catch(() => undefined)
+      }
+    }
+    fetched++
+    onProgress({ detail: `Sincronizando archivos del modpack... (${fetched}${total ? `/${total}` : ''})`, current: fetched, total })
+    return bytes
+  }
+
   try {
-    const { readdir, rm: rmFile } = await import('node:fs/promises')
-    // Buscar archivos .orvian-tmp en mods/ y config/ recursivamente
-    for (const dir of ['mods', 'config', 'defaultconfigs', 'shaderpacks', 'resourcepacks']) {
-      const dirPath = join(instanceDir, dir)
-      const files = await readdir(dirPath, { withFileTypes: true, recursive: true }).catch(() => [])
-      for (const f of files) {
-        if (!f.isDirectory() && f.name.endsWith('.orvian-tmp')) {
-          const fullPath = join('parentPath' in f ? (f as any).parentPath : dirPath, f.name)
-          await rmFile(fullPath, { force: true }).catch(() => {})
-        }
-      }
-    }
-  } catch {}
-
-
-  let zipBuffer: Buffer | null = null
-  let entryMap: Map<string, any> | null = null
-  let zipFile: any = null
-
-  const fetchBytes = async (file: PackFile) => {
-    if (!zipBuffer || !entryMap) {
-      const tag = version.startsWith('v') ? version : `v${version}`
-      onProgress(`Descargando modpack.zip (${tag})...`)
-      let zipUrl = `https://github.com/${getConfig().packRepo}/releases/download/${tag}/modpack.zip`
-      let res = await fetch(zipUrl)
-      if (!res.ok) {
-        const altTag = version.startsWith('v') ? version.slice(1) : version
-        const altUrl = `https://github.com/${getConfig().packRepo}/releases/download/${altTag}/modpack.zip`
-        const altRes = await fetch(altUrl)
-        if (altRes.ok) {
-          res = altRes
-          zipUrl = altUrl
-        } else {
-          const latestUrl = `https://github.com/${getConfig().packRepo}/releases/latest/download/modpack.zip`
-          const latestRes = await fetch(latestUrl)
-          if (latestRes.ok) {
-            res = latestRes
-            zipUrl = latestUrl
-          } else {
-            throw new Error(`Fallo al descargar modpack.zip desde ${zipUrl} (HTTP ${res.status})`)
-          }
-        }
-      }
-      zipBuffer = Buffer.from(await res.arrayBuffer())
-      
-      onProgress('Abriendo y leyendo modpack.zip...')
-      const { open, readAllEntries } = await import('@xmcl/unzip')
-      zipFile = await open(zipBuffer)
-      const entries = await readAllEntries(zipFile)
-      
-      entryMap = new Map()
-      const hasDotMinecraft = entries.some((e: any) => e.fileName.startsWith('.minecraft/') || e.fileName.includes('/.minecraft/'))
-      const hasOverrides = entries.some((e: any) => e.fileName.startsWith('overrides/'))
-      
-      let prefix = ''
-      if (hasDotMinecraft) {
-        const dotMcEntry = entries.find((e: any) => e.fileName.endsWith('.minecraft/') || e.fileName.includes('/.minecraft/'))
-        if (dotMcEntry) {
-          const idx = dotMcEntry.fileName.indexOf('.minecraft/')
-          prefix = dotMcEntry.fileName.slice(0, idx + '.minecraft/'.length)
-        } else {
-          prefix = '.minecraft/'
-        }
-      } else if (hasOverrides) {
-        prefix = 'overrides/'
-      }
-      
-      for (const entry of entries) {
-        if (entry.fileName.endsWith('/')) continue
-        const norm = entry.fileName.replace(/\\/g, '/')
-        let rel = norm
-        if (rel.includes('.minecraft/')) {
-          rel = rel.slice(rel.indexOf('.minecraft/') + '.minecraft/'.length)
-        } else if (rel.startsWith('minecraft/')) {
-          rel = rel.slice('minecraft/'.length)
-        } else if (prefix && rel.startsWith(prefix)) {
-          rel = rel.slice(prefix.length)
-        }
-        rel = rel.replace(/^\/+/, '')
-        if (rel) {
-          entryMap.set(rel, entry)
-          entryMap.set(rel.toLowerCase(), entry)
-          entryMap.set(norm, entry)
-          entryMap.set(norm.toLowerCase(), entry)
-        }
-      }
-    }
-    
-    const entry = entryMap.get(file.path) ?? entryMap.get(file.path.toLowerCase())
-    if (!entry) {
-      throw new Error(`El archivo ${file.path} no se encuentra en el ZIP del modpack.`)
-    }
-    
-    const { readEntry } = await import('@xmcl/unzip')
-    const buf = await readEntry(zipFile, entry)
-    
-    processed++
-    if (processed % 10 === 0) {
-      onProgress(`Sincronizando archivos del modpack... (${processed})`)
-    }
-    return new Uint8Array(buf)
+    const result = await synchronizeOfficialFiles(instanceDir, version, manifest.files, fetchBytes, { forceVerify: fullVerify })
+    // The next sync should not find a stale archive from this version lying around.
+    await rm(archivePath, { force: true }).catch(() => undefined)
+    log.info('[Modpack] v%s sincronizado: %d instalados, %d reemplazados, %d sin cambios, %d de confianza, %d configs conservadas', version, result.installed, result.replaced, result.unchanged, result.trustedFromState, result.preservedConfigs)
+    return result
+  } finally {
+    ;(opened as { zip: ZipFile } | null)?.zip.close()
+    await rm(join(cacheDir, 'direct'), { recursive: true, force: true }).catch(() => undefined)
   }
-  
-  const result = await synchronizeOfficialFiles(instanceDir, version, manifestFiles, fetchBytes, opts)
-  if (zipFile && zipFile.close) {
-    try { zipFile.close() } catch {}
-  }
-
-  // ── Resumen de diagnóstico ───────────────────────────────────────────────
-  const wasAlreadyCurrent = result.trustedFromState > 0 && result.installed === 0 && result.replaced === 0
-  if (wasAlreadyCurrent) {
-    log.info(`[Launcher] Modpack v${version} ya estaba instalado correctamente.`)
-    log.info(`[Launcher]   → ${result.trustedFromState} archivos validados desde estado (sin descarga)`)
-    log.info(`[Launcher]   → ${result.unchanged} archivos verificados con SHA-256 (sin cambios)`)
-  } else {
-    log.info(`[Launcher] Sync del modpack v${version} completado:`)
-    log.info(`[Launcher]   → Instalados: ${result.installed}`)
-    log.info(`[Launcher]   → Reemplazados: ${result.replaced}`)
-    log.info(`[Launcher]   → Sin cambios (SHA-256): ${result.unchanged}`)
-    log.info(`[Launcher]   → Fast-path (confiados desde estado): ${result.trustedFromState}`)
-    log.info(`[Launcher]   → Configs preservadas: ${result.preservedConfigs}`)
-    log.info(`[Launcher]   → Defaults nuevos staged: ${result.stagedDefaults}`)
-  }
-
-  return result
 }

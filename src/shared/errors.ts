@@ -12,6 +12,7 @@ export type OrvianErrorCode =
   | 'FORGE_INSTALL_FAILED'
   | 'LIBRARIES_MISSING'
   | 'PACK_ARCHIVE_MISSING'
+  | 'UPDATE_INTERRUPTED'
   | 'MANIFEST_INVALID'
   | 'LAUNCHER_TOO_OLD'
   | 'AUTH_CANCELLED'
@@ -136,6 +137,11 @@ const CATALOG: Record<OrvianErrorCode, CatalogEntry> = {
     title: 'La versión {v|nueva} aún no está disponible',
     body: 'El administrador la está publicando. Prueba de nuevo en unos minutos.',
     actions: ['retry']
+  },
+  UPDATE_INTERRUPTED: {
+    title: 'La actualización no terminó',
+    body: 'Se interrumpió una actualización del modpack y algunos archivos pueden estar a medias. Conéctate para completarla o repara la instalación.',
+    actions: ['retry', 'repair']
   },
   MANIFEST_INVALID: {
     title: 'Datos del modpack no válidos',

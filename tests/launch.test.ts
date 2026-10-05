@@ -129,6 +129,14 @@ describe('game pipeline', () => {
     expect(order).toEqual(['java', 'vanilla', 'forge', 'deps', 'launch'])
   })
 
+  it('refuses to run the installed files when an update was interrupted', async () => {
+    await writeInstalled('1.0.3')
+    await writeFile(join(root, 'instances', 'orvian', '.orvian', 'sync.marker'), '{}')
+    const result = await playGame(deps, { playInstalled: true })
+    expect(result.error?.code).toBe('UPDATE_INTERRUPTED')
+    expect(order).toEqual([])
+  })
+
   it('cannot play an installed version that does not exist', async () => {
     const result = await playGame(deps, { playInstalled: true })
     expect(result.error?.code).toBe('OFFLINE_NOT_INSTALLED')
@@ -156,14 +164,14 @@ describe('game pipeline', () => {
     expect(vi.mocked(ensureJava17).mock.calls[0][2]).toEqual({ force: true })
     expect(vi.mocked(ensureVanilla).mock.calls[0][3]).toEqual({ fullVerify: true })
     expect(vi.mocked(ensureDependencies).mock.calls[0][3]).toEqual({ fullVerify: true })
-    expect(vi.mocked(syncModpack).mock.calls[0][4]).toEqual({ forceVerify: true })
+    expect(vi.mocked(syncModpack).mock.calls[0][0]).toMatchObject({ fullVerify: true })
     expect(isMinecraftRunning()).toBe(false)
   })
 
   it('a normal play does not force verification', async () => {
     await playGame(deps)
     expect(vi.mocked(ensureDependencies).mock.calls[0][3]).toEqual({ fullVerify: false })
-    expect(vi.mocked(syncModpack).mock.calls[0][4]).toEqual({ forceVerify: false })
+    expect(vi.mocked(syncModpack).mock.calls[0][0]).toMatchObject({ fullVerify: false })
   })
 
   it('turns a failing step into a typed result and releases the lock', async () => {

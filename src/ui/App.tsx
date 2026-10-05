@@ -56,6 +56,8 @@ export default function App() {
   const [mrpackFile, setMrpackFile] = useState<{ selectionId: string; name: string } | null>(null)
   const [newVersion, setNewVersion] = useState('')
   const [changelog, setChangelog] = useState('')
+  const [overwrite, setOverwrite] = useState(false)
+  const [minimumLauncher, setMinimumLauncher] = useState('')
   const [tokenInput, setTokenInput] = useState('')
   const [tokenStatus, setTokenStatus] = useState<{ hasToken: boolean; canEncrypt: boolean } | null>(null)
   const [tokenBusy, setTokenBusy] = useState(false)
@@ -677,6 +679,28 @@ export default function App() {
                   </div>
 
                   <div className="admin-form-group">
+                    <label htmlFor="admin-min-launcher">Launcher mínimo (opcional)</label>
+                    <input
+                      id="admin-min-launcher"
+                      type="text"
+                      className="admin-input"
+                      placeholder="Ej: 1.0.5"
+                      spellCheck={false}
+                      value={minimumLauncher}
+                      onChange={(e) => setMinimumLauncher(e.target.value)}
+                    />
+                    <span className="admin-hint">Déjalo vacío para conservar el valor actual. Los jugadores con un launcher anterior tendrán que actualizarlo antes de jugar esta versión.</span>
+                  </div>
+
+                  <div className="admin-form-group">
+                    <label>
+                      <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />{' '}
+                      Sobrescribir si esta versión ya está publicada
+                    </label>
+                    <span className="admin-hint">Solo para corregir una release. Mientras se suben los archivos, los jugadores pueden ver errores temporales.</span>
+                  </div>
+
+                  <div className="admin-form-group">
                     <label>Notas de la versión / Changelog</label>
                     <textarea 
                       className="admin-textarea" 
@@ -719,7 +743,9 @@ export default function App() {
                         const res = await window.orvian.publishUpdate({
                           selectionId: mrpackFile.selectionId,
                           version: newVersion.trim(),
-                          changelog: changelog.trim()
+                          changelog: changelog.trim(),
+                          overwrite,
+                          minimumLauncher: minimumLauncher.trim() || undefined
                         })
                         setPublishSuccess(res.releaseUrl)
                         setMessage(`¡Versión ${newVersion} publicada en GitHub!`)
