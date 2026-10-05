@@ -1,9 +1,15 @@
-import { app, type IpcMain, shell, BrowserWindow, dialog, session } from 'electron'
-import { join, resolve, sep } from 'node:path'
+import { app, shell, BrowserWindow, dialog, Notification, session } from 'electron'
+import { z } from 'zod'
+import { basename, join, resolve, sep } from 'node:path'
 import { readFile, writeFile } from 'node:fs/promises'
 import type { ChildProcess } from 'node:child_process'
 import { execSync } from 'node:child_process'
 import { safePackPath, OrvianManifest, ManifestSchema } from '../src/shared/manifest'
+import { userMessage } from '../src/shared/errors'
+import { forgeVersionId, getConfig, isAdminUuid } from './config'
+import type { Ipc } from './ipc'
+import { log } from './logger'
+import { fetchWithTimeout } from './net'
 import { AuthService } from './auth'
 import { ensureJava17 } from './java'
 import { ensureMinecraftVanilla, ensureForge, ensureDependencies, syncModpack } from './minecraft'
@@ -45,22 +51,6 @@ export function killMinecraftProcess(): void {
   isBusy = false
 }
 
-const GITHUB_REPO = 'zzyren/orvianmodpack'
-
-/**
- * fetch() con timeout explícito. Evita que una petición de red se quede
- * colgada indefinidamente cuando GitHub / CDN no responde.
- */
-async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    return await fetch(url, { ...init, signal: controller.signal })
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
 let inMemoryManifest: { manifest: OrvianManifest; timestamp: number } | null = null
 // 1 minuto de caché en memoria para el manifest
 const MANIFEST_CACHE_TTL = 1 * 60 * 1000
@@ -84,7 +74,7 @@ async function getOrvianManifest(dataRoot: string, forceRefresh = false): Promis
   // Timeout de 10s: si GitHub no responde, pasar al siguiente fallback
   try {
     const directRes = await fetchWithTimeout(
-      `https://github.com/${GITHUB_REPO}/releases/latest/download/orvian-manifest.json?t=${Date.now()}`,
+      getConfig().manifestUrl ?? `https://github.com/${getConfig().packRepo}/releases/latest/download/orvian-manifest.json?t=${Date.now()}`,
       { headers: noCacheHeaders },
       10_000
     )
@@ -98,19 +88,19 @@ async function getOrvianManifest(dataRoot: string, forceRefresh = false): Promis
         inMemoryManifest = { manifest: normalized, timestamp: Date.now() }
         return normalized
       } else {
-        console.warn('[Manifest] Manifiesto remoto inválido (Zod):', parsed.error.issues.slice(0, 3))
+        log.warn('[Manifest] Manifiesto remoto inválido (Zod):', parsed.error.issues.slice(0, 3))
       }
     }
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
-      console.warn('[Manifest] Timeout al descargar manifest desde GitHub releases/latest')
+      log.warn('[Manifest] Timeout al descargar manifest desde GitHub releases/latest')
     }
   }
 
   // 2. Fallback a la API de GitHub para consultar la última release
   try {
     const res = await fetchWithTimeout(
-      `https://api.github.com/repos/${GITHUB_REPO}/releases/latest?t=${Date.now()}`,
+      `https://api.github.com/repos/${getConfig().packRepo}/releases/latest?t=${Date.now()}`,
       { headers: noCacheHeaders },
       10_000
     )
@@ -132,14 +122,14 @@ async function getOrvianManifest(dataRoot: string, forceRefresh = false): Promis
             inMemoryManifest = { manifest: normalized, timestamp: Date.now() }
             return normalized
           } else {
-            console.warn('[Manifest] Manifiesto remoto inválido (API fallback, Zod):', parsed.error.issues.slice(0, 3))
+            log.warn('[Manifest] Manifiesto remoto inválido (API fallback, Zod):', parsed.error.issues.slice(0, 3))
           }
         }
       }
     }
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
-      console.warn('[Manifest] Timeout al consultar GitHub API releases/latest')
+      log.warn('[Manifest] Timeout al consultar GitHub API releases/latest')
     }
   }
 
@@ -150,7 +140,7 @@ async function getOrvianManifest(dataRoot: string, forceRefresh = false): Promis
       const norm = normalizeManifest(JSON.parse(JSON.stringify(cached)))
       // Caché del disco: timestamp = 0 para que expire pronto y se reintente en el siguiente ciclo
       inMemoryManifest = { manifest: norm, timestamp: 0 }
-      console.log('[Manifest] Usando manifest en caché local (sin conexión a Internet)')
+      log.info('[Manifest] Usando manifest en caché local (sin conexión a Internet)')
       return norm
     }
   } catch {}
@@ -193,12 +183,10 @@ function broadcastModpackStatus(installed: string | null, latest: string | null)
   })
 }
 
-export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
+export function registerLauncherIpc(ipc: Ipc, dataRoot: string) {
   const instance = join(dataRoot, 'instances', 'orvian')
   const common = join(dataRoot, 'common')
   const authService = new AuthService(dataRoot)
-
-  const ADMIN_UUIDS = ['a8603c06e7474c44b0bde33067ab6627', 'a8603c06-e747-4c44-b0bd-e33067ab6627']
 
   const emitProgress = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent, state: string, progress: number, detail: string) => {
     BrowserWindow.getAllWindows().forEach(win => {
@@ -236,9 +224,8 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
 
         // Si hay una versión nueva disponible, notificación del sistema + log
         if (installed && latest && installed !== latest) {
-          console.log(`[Modpack] Nueva version disponible: ${latest} (instalada: ${installed})`)
+          log.info(`[Modpack] Nueva version disponible: ${latest} (instalada: ${installed})`)
           try {
-            const { Notification } = require('electron')
             if (Notification.isSupported()) {
               const notif = new Notification({
                 title: 'Orvian Modpack Actualizado',
@@ -255,12 +242,12 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
               notif.show()
             }
           } catch (err) {
-            console.error('[Modpack] Fallo al mostrar notificacion del sistema:', err)
+            log.error('[Modpack] Fallo al mostrar notificacion del sistema:', err)
           }
         }
       }
     } catch (err) {
-      console.warn('[Modpack] Fallo en comprobacion de actualizacion:', err)
+      log.warn('[Modpack] Fallo en comprobacion de actualizacion:', err)
     }
   }
 
@@ -272,7 +259,7 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
 
   // ─── Handler: launcher:status ─────────────────────────────────────────────
   // useCache=true por defecto para respuesta rápida; pack:check fuerza refresh
-  ipc.handle('launcher:status', async (_event, opts?: { fresh?: boolean }) => {
+  ipc.handle('launcher:status', [z.object({ fresh: z.boolean().optional() }).optional()], async (_event, opts) => {
     const fresh = opts?.fresh ?? false
     const settings = await readJson(join(dataRoot, 'launcher', 'config.json'), { ramGb: 6 })
     const account = await authService.loadAccount()
@@ -299,7 +286,7 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
       authenticated: account !== null, 
       playerName: account?.name ?? null,
       playerUuid: account?.uuid ?? null,
-      isAdmin: account !== null && ADMIN_UUIDS.includes(account.uuid),
+      isAdmin: account !== null && isAdminUuid(account.uuid),
       ramGb: settings.ramGb, 
       configured: manifest !== null,
       isPlaying: isMinecraftRunning()
@@ -307,7 +294,7 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
   })
 
   // ─── Handler: pack:check — forzar comprobación fresca ────────────────────
-  ipc.handle('pack:check', async () => {
+  ipc.handle('pack:check', [], async () => {
     try {
       const manifest = await getOrvianManifest(dataRoot, true) // siempre forceRefresh
       const statePath = join(instance, '.orvian', 'official-state.json')
@@ -336,12 +323,12 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
     }
   })
   
-  ipc.handle('pack:repair', async () => {
+  ipc.handle('pack:repair', [], async () => {
     forceRepairNextPlay = true
     return { ok: true, message: 'La reparación profunda se ejecutará ahora al iniciar el juego.' }
   })
 
-  ipc.handle('game:play', async (event) => {
+  ipc.handle('game:play', [], async (event) => {
     // ── Mutex: previene ejecuciones paralelas ───────────────────────────────────
     if (isPlaying) return { ok: false, message: 'Minecraft ya está en ejecución.' }
     if (isBusy) return { ok: false, message: 'El launcher ya está realizando una operación. Espera a que termine.' }
@@ -363,7 +350,7 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
         if (!installedVersion) {
           throw new Error('No hay conexión a Internet y el modpack no está instalado en este equipo. Conéctate para instalarlo por primera vez.')
         }
-        console.warn(`[Launcher] Modo Offline activo. Usando la versión instalada localmente (v${installedVersion}).`)
+        log.warn(`[Launcher] Modo Offline activo. Usando la versión instalada localmente (v${installedVersion}).`)
         // Emular un manifest básico para poder arrancar
         // getOrvianManifest ya devuelve null si TODO falla, por lo que aquí forzamos el juego
       }
@@ -388,31 +375,31 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
       await ensureDependencies(common, (detail) => emitProgress(event, 'deps', 0.68, detail))
 
       // ── Determinar estado del modpack ANTES de sincronizar ────────────────────
-      console.log(`[Launcher] Versión del modpack instalada: ${installedVersion ?? 'no instalado'}`)
-      console.log(`[Launcher] Versión del modpack requerida: ${requiredVersion}`)
+      log.info(`[Launcher] Versión del modpack instalada: ${installedVersion ?? 'no instalado'}`)
+      log.info(`[Launcher] Versión del modpack requerida: ${requiredVersion}`)
 
       const isFirstInstall = !installedVersion
       const needsUpdate = installedVersion !== null && installedVersion !== requiredVersion
       const alreadyCurrent = installedVersion === requiredVersion && installedVersion !== null
 
-      console.log(`[Launcher] Primera instalación: ${isFirstInstall}`)
-      console.log(`[Launcher] Actualización requerida: ${needsUpdate}`)
-      console.log(`[Launcher] Ya actualizado: ${alreadyCurrent}`)
+      log.info(`[Launcher] Primera instalación: ${isFirstInstall}`)
+      log.info(`[Launcher] Actualización requerida: ${needsUpdate}`)
+      log.info(`[Launcher] Ya actualizado: ${alreadyCurrent}`)
 
       const isRepair = forceRepairNextPlay
       forceRepairNextPlay = false
 
       if (isRepair) {
         emitProgress(event, 'pack', 0.7, `Reparando modpack v${requiredVersion}... (Verificación profunda)`)
-        console.log(`[Launcher] Ejecutando REPARACIÓN PROFUNDA (SHA-256 forzado)...`)
+        log.info(`[Launcher] Ejecutando REPARACIÓN PROFUNDA (SHA-256 forzado)...`)
       } else if (isFirstInstall) {
         emitProgress(event, 'pack', 0.7, 'Instalando modpack Orvian por primera vez...')
       } else if (needsUpdate) {
         emitProgress(event, 'pack', 0.7, `Actualizando modpack: v${installedVersion} → v${requiredVersion}...`)
-        console.log(`[Launcher] Actualizando modpack: v${installedVersion} → v${requiredVersion}`)
+        log.info(`[Launcher] Actualizando modpack: v${installedVersion} → v${requiredVersion}`)
       } else {
         emitProgress(event, 'pack', 0.7, `Verificando modpack v${requiredVersion}...`)
-        console.log(`[Launcher] Verificando integridad del modpack v${requiredVersion}...`)
+        log.info(`[Launcher] Verificando integridad del modpack v${requiredVersion}...`)
       }
 
       // Sincronizar (si estamos offline y ya estaba instalado, no habrá manifestFiles y pasará rápido,
@@ -428,7 +415,7 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
       // Mensaje post-sync para el usuario
       const noDownload = syncResult.installed === 0 && syncResult.replaced === 0
       if (noDownload) {
-        console.log(`[Launcher] No se descargó nada — modpack v${requiredVersion} listo para jugar.`)
+        log.info(`[Launcher] No se descargó nada — modpack v${requiredVersion} listo para jugar.`)
       }
 
       // Actualizar tracking de versiones tras la sincronización
@@ -437,7 +424,7 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
       broadcastModpackStatus(requiredVersion, requiredVersion)
 
       emitProgress(event, 'launching', 0.9, 'Resolviendo entorno de ejecución...')
-      const resolvedVersion = await Version.parse(common, '1.20.1-forge-47.4.23')
+      const resolvedVersion = await Version.parse(common, forgeVersionId())
 
       emitProgress(event, 'launching', 0.95, 'Iniciando juego...')
       isPlaying = true
@@ -487,8 +474,8 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
       activeMinecraftProcess = null
       isPlaying = false
       isBusy = false
-      const msg = error instanceof Error ? error.message : String(error)
-      console.error('[Launcher] Error al iniciar Minecraft:', msg)
+      const msg = userMessage(error)
+      log.error('[Launcher] Error al iniciar Minecraft: %s', error instanceof Error ? (error.stack ?? msg) : msg)
       return { ok: false, message: msg }
     } finally {
       // El mutex se libera cuando termina de arrancar Minecraft (o si hay error).
@@ -498,22 +485,22 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
     }
   })
 
-  ipc.handle('account:login', async (event) => {
+  ipc.handle('account:login', [], async (event) => {
     try {
       const window = BrowserWindow.fromWebContents(event.sender) ?? undefined
       await authService.loginWithMicrosoft(window)
       return { ok: true, message: 'Sesión iniciada con éxito.' }
     } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      return { ok: false, message: userMessage(error) }
     }
   })
 
-  ipc.handle('account:logout', async () => {
+  ipc.handle('account:logout', [], async () => {
     await authService.saveAccount(null)
     return { ok: true }
   })
 
-  ipc.handle('settings:ram', async (_event, value: unknown) => {
+  ipc.handle('settings:ram', [z.number()], async (_event, value) => {
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 2 || value > 16) throw new Error('RAM fuera de rango')
     const physical = Math.floor(os.totalmem() / 1024 ** 3)
     if (value > Math.max(2, physical - 3)) throw new Error('La configuración dejaría muy poca memoria para Windows')
@@ -523,8 +510,7 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
     return { ok: true }
   })
 
-  ipc.handle('folder:open', async (_event, kind: unknown) => {
-    if (!['mods', 'shaders', 'resourcepacks', 'logs'].includes(String(kind))) throw new Error('Carpeta no permitida')
+  ipc.handle('folder:open', [z.enum(['mods', 'shaders', 'resourcepacks', 'logs'])], async (_event, kind) => {
     // 'logs' → carpeta de logs del launcher
     // Resto → carpeta directa dentro de la instancia (mods/, shaderpacks/, resourcepacks/)
     // NOTA: abrimos la carpeta real donde están los archivos, no una subcarpeta 'user'
@@ -546,7 +532,7 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
     return { ok: !error, error }
   })
 
-  ipc.handle('admin:reset', async () => {
+  ipc.handle('admin:reset', [], async () => {
     if (isPlaying) {
       throw new Error('No puedes restablecer el launcher mientras Minecraft se esté ejecutando.')
     }
@@ -582,9 +568,9 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
     return { ok: true, message: 'Launcher restablecido de fábrica. Todo ha quedado como nuevo.' }
   })
 
-  ipc.handle('admin:pick-mrpack', async (event) => {
+  ipc.handle('admin:pick-mrpack', [], async (event) => {
     const account = await authService.loadAccount()
-    if (!account || !ADMIN_UUIDS.includes(account.uuid)) {
+    if (!account || !isAdminUuid(account.uuid)) {
       throw new Error('No tienes permisos de administrador para realizar esta acción.')
     }
     const win = BrowserWindow.fromWebContents(event.sender)
@@ -600,17 +586,17 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
       return { canceled: true, filePath: null, fileName: null }
     }
     const path = result.filePaths[0]
-    return { canceled: false, filePath: path, fileName: require('node:path').basename(path) }
+    return { canceled: false, filePath: path, fileName: basename(path) }
   })
 
-  ipc.handle('admin:publish-update', async (event, params: {
-    mrpackPath: string
-    version: string
-    changelog: string
-    githubToken: string
-  }) => {
+  ipc.handle('admin:publish-update', [z.object({
+    mrpackPath: z.string().min(1).max(1024),
+    version: z.string().min(1).max(64),
+    changelog: z.string().max(10_000),
+    githubToken: z.string().min(1).max(512)
+  })], async (event, params) => {
     const account = await authService.loadAccount()
-    if (!account || !ADMIN_UUIDS.includes(account.uuid)) {
+    if (!account || !isAdminUuid(account.uuid)) {
       throw new Error('No tienes permisos de administrador para publicar actualizaciones.')
     }
 
@@ -629,14 +615,14 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
       zipBuffer,
       version,
       changelogLines,
-      GITHUB_REPO,
+      getConfig().packRepo,
       (detail, p) => emitProgress(event, 'publishing', p ?? 0.4, detail)
     )
 
     emitProgress(event, 'publishing', 0.6, 'Publicando release en GitHub...')
     const result = await publishReleaseToGitHub({
       token: githubToken,
-      repo: GITHUB_REPO,
+      repo: getConfig().packRepo,
       version,
       changelog,
       manifest,
@@ -656,11 +642,17 @@ export function registerLauncherIpc(ipc: IpcMain, dataRoot: string) {
     return { ok: true, releaseUrl: result.releaseUrl, message: `¡Versión ${version} publicada correctamente en GitHub!` }
   })
 
-  ipc.handle('url:open', async (_event, url: string) => {
-    if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
-      await shell.openExternal(url)
-    }
+  ipc.handle('url:open', [z.string().max(2048)], async (_event, url) => {
+    if (isHttpsUrl(url)) await shell.openExternal(url)
   })
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 async function readJson<T>(path: string, fallback: T): Promise<T> {

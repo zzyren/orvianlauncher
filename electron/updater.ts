@@ -1,6 +1,9 @@
 import { autoUpdater } from 'electron-updater'
-import type { IpcMain, BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
 import { app } from 'electron'
+import { getConfig } from './config'
+import type { Ipc } from './ipc'
+import { log } from './logger'
 
 // ─── Tipos de eventos que se envian al renderer ───────────────────────────────
 
@@ -45,15 +48,15 @@ export function configureAutoUpdater() {
   // ─── Eventos de electron-updater ─────────────────────────────────────────
 
   autoUpdater.on('checking-for-update', () => {
-    console.log('[Updater] Comprobando actualizaciones del launcher...')
+    log.info('[Updater] Comprobando actualizaciones del launcher...')
     send({ type: 'checking' })
   })
 
   autoUpdater.on('update-available', (info) => {
-    console.log(`[Updater] Actualizacion del launcher disponible: v${info.version}`)
+    log.info(`[Updater] Actualizacion del launcher disponible: v${info.version}`)
     // Anti-bucle: si ya descargamos esta versión, no volver a anunciarla
     if (downloadedVersion === info.version) {
-      console.log('[Updater] Esta version ya fue descargada. Ignorando evento duplicado.')
+      log.info('[Updater] Esta version ya fue descargada. Ignorando evento duplicado.')
       return
     }
     const releaseNotes = typeof info.releaseNotes === 'string'
@@ -73,7 +76,7 @@ export function configureAutoUpdater() {
   })
 
   autoUpdater.on('update-not-available', (_info) => {
-    console.log('[Updater] El launcher ya esta en la ultima version.')
+    log.info('[Updater] El launcher ya esta en la ultima version.')
     send({ type: 'not-available', currentVersion: app.getVersion() })
     isChecking = false
   })
@@ -89,7 +92,7 @@ export function configureAutoUpdater() {
   })
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log(`[Updater] Actualizacion del launcher descargada: v${info.version}`)
+    log.info(`[Updater] Actualizacion del launcher descargada: v${info.version}`)
     downloadedVersion = info.version
     isChecking = false
     send({ type: 'downloaded', newVersion: info.version })
@@ -97,7 +100,7 @@ export function configureAutoUpdater() {
 
   autoUpdater.on('error', (err) => {
     const msg = err?.message ?? String(err)
-    console.warn('[Updater] Error (no critico):', msg)
+    log.warn('[Updater] Error (no critico):', msg)
     isChecking = false
     // Solo enviar si no es un error de entorno de desarrollo o de configuración missing
     const ignoredMessages = [
@@ -114,7 +117,7 @@ export function configureAutoUpdater() {
 
 // ─── Registro de handlers IPC ─────────────────────────────────────────────────
 
-export function registerUpdaterIpc(ipcMain: IpcMain, getMainWindow: () => BrowserWindow | null) {
+export function registerUpdaterIpc(ipc: Ipc, getMainWindow: () => BrowserWindow | null) {
   function refreshWindow() {
     const win = getMainWindow()
     if (win && !win.isDestroyed()) {
@@ -123,10 +126,10 @@ export function registerUpdaterIpc(ipcMain: IpcMain, getMainWindow: () => Browse
   }
 
   // Comprobar actualizaciones del launcher bajo demanda
-  ipcMain.handle('updater:check', async () => {
+  ipc.handle('updater:check', [], async () => {
     refreshWindow()
     if (isChecking) {
-      console.log('[Updater] Comprobacion ya en curso, ignorando peticion duplicada.')
+      log.info('[Updater] Comprobacion ya en curso, ignorando peticion duplicada.')
       return { ok: true }
     }
     isChecking = true
@@ -135,38 +138,38 @@ export function registerUpdaterIpc(ipcMain: IpcMain, getMainWindow: () => Browse
       return { ok: true }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.warn('[Updater] checkForUpdates fallo:', msg)
+      log.warn('[Updater] checkForUpdates fallo:', msg)
       isChecking = false
       return { ok: false, message: msg }
     }
   })
 
   // Iniciar descarga del launcher
-  ipcMain.handle('updater:download', async () => {
+  ipc.handle('updater:download', [], async () => {
     refreshWindow()
     try {
       await autoUpdater.downloadUpdate()
       return { ok: true }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.warn('[Updater] downloadUpdate fallo:', msg)
+      log.warn('[Updater] downloadUpdate fallo:', msg)
       return { ok: false, message: msg }
     }
   })
 
   // Instalar y reiniciar
-  ipcMain.handle('updater:install', () => {
+  ipc.handle('updater:install', [], () => {
     try {
       // isSilent=false para mostrar el instalador NSIS visualmente,
       // isForceRunAfter=true para que el launcher se abra después de instalar
       autoUpdater.quitAndInstall(false, true)
     } catch (err) {
-      console.error('[Updater] quitAndInstall fallo:', err)
+      log.error('[Updater] quitAndInstall fallo:', err)
     }
   })
 
   // Obtener version actual del ejecutable
-  ipcMain.handle('updater:get-version', () => {
+  ipc.handle('updater:get-version', [], () => {
     return app.getVersion()
   })
 }
@@ -175,8 +178,8 @@ export function registerUpdaterIpc(ipcMain: IpcMain, getMainWindow: () => Browse
 
 export function scheduleUpdateCheck(delay = 8000) {
   // Solo en produccion — en dev no hay actualizador real
-  if (process.env.VITE_DEV_SERVER_URL) {
-    console.log('[Updater] Modo desarrollo — comprobacion de actualizaciones desactivada.')
+  if (getConfig().devServerUrl) {
+    log.info('[Updater] Modo desarrollo — comprobacion de actualizaciones desactivada.')
     return
   }
   if (isChecking) return
@@ -187,7 +190,7 @@ export function scheduleUpdateCheck(delay = 8000) {
     try {
       await autoUpdater.checkForUpdates()
     } catch (err) {
-      console.warn('[Updater] Comprobacion automatica fallida (no critico):', err)
+      log.warn('[Updater] Comprobacion automatica fallida (no critico):', err)
       isChecking = false
     }
   }, delay)

@@ -1,87 +1,35 @@
 import { join } from 'node:path'
-import { mkdir, readFile, stat } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
-import { createWriteStream } from 'node:fs'
-import { pipeline } from 'node:stream/promises'
 import type { PackFile } from '../src/shared/manifest'
-import { synchronizeOfficialFiles, sha256File, type SyncResult, type SyncOptions } from '../src/shared/integrity'
-
-async function fetchJson(url: string) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 15_000)
-  try {
-    const res = await fetch(url, { signal: controller.signal })
-    if (!res.ok) throw new Error(`Error HTTP ${res.status} al obtener: ${url}`)
-    return res.json()
-  } catch (err) {
-    if ((err as Error).name === 'AbortError') throw new Error(`Timeout de red al obtener: ${url}`)
-    throw err
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-async function downloadFile(url: string, dest: string, size?: number, sha1?: string, retries = 3): Promise<void> {
-  try {
-    if (size) {
-      const info = await stat(dest)
-      if (info.isFile() && info.size === size) {
-        if (sha1) {
-          const crypto = await import('node:crypto')
-          const hash = crypto.createHash('sha1').update(await readFile(dest)).digest('hex')
-          if (hash.toLowerCase() === sha1.toLowerCase()) return
-        } else {
-          return
-        }
-      }
-    }
-  } catch {}
-
-  await mkdir(join(dest, '..'), { recursive: true })
-  
-  let lastError: any
-  for (let i = 0; i < retries; i++) {
-    try {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 15000)
-      
-      const res = await fetch(url, { signal: controller.signal })
-      clearTimeout(timeoutId)
-      
-      if (!res.ok || !res.body) throw new Error(`Download failed: ${res.status} ${res.statusText}`)
-      const { Readable } = require('node:stream')
-      await pipeline(Readable.fromWeb(res.body as any), createWriteStream(dest))
-      return
-    } catch (err) {
-      lastError = err
-      await new Promise(r => setTimeout(r, 1000 * (i + 1)))
-    }
-  }
-  throw lastError
-}
+import { synchronizeOfficialFiles, type SyncResult, type SyncOptions } from '../src/shared/integrity'
+import { forgeVersionId, getConfig } from './config'
+import { log } from './logger'
+import { download, fetchJson } from './net'
 
 export async function ensureMinecraftVanilla(commonDir: string, onProgress: (detail: string) => void): Promise<void> {
   onProgress('Obteniendo manifiesto de versiones de Minecraft...')
-  const meta = await fetchJson('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json')
-  const vMeta = meta.versions.find((v: any) => v.id === '1.20.1')
-  if (!vMeta) throw new Error('No se encontró la versión 1.20.1')
+  const mc = getConfig().mcVersion
+  const meta = await fetchJson<any>('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json')
+  const vMeta = meta.versions.find((v: any) => v.id === mc)
+  if (!vMeta) throw new Error(`No se encontró la versión ${mc}`)
 
-  const vJson = await fetchJson(vMeta.url)
-  const vDir = join(commonDir, 'versions', '1.20.1')
+  const vJson = await fetchJson<any>(vMeta.url)
+  const vDir = join(commonDir, 'versions', mc)
   await mkdir(vDir, { recursive: true })
   
   const { writeFile } = await import('node:fs/promises')
-  await writeFile(join(vDir, '1.20.1.json'), JSON.stringify(vJson, null, 2))
+  await writeFile(join(vDir, `${mc}.json`), JSON.stringify(vJson, null, 2))
 
-  onProgress('Descargando cliente de Minecraft 1.20.1...')
+  onProgress(`Descargando cliente de Minecraft ${mc}...`)
   const clientUrl = vJson.downloads.client.url
-  await downloadFile(clientUrl, join(vDir, '1.20.1.jar'), vJson.downloads.client.size, vJson.downloads.client.sha1)
+  await download(clientUrl, join(vDir, `${mc}.jar`), { size: vJson.downloads.client.size, sha1: vJson.downloads.client.sha1 })
 
   onProgress('Descargando índice de recursos de Minecraft...')
   const assetIndex = vJson.assetIndex
   const indexesDir = join(commonDir, 'assets', 'indexes')
   await mkdir(indexesDir, { recursive: true })
-  await downloadFile(assetIndex.url, join(indexesDir, `${assetIndex.id}.json`), assetIndex.size, assetIndex.sha1)
+  await download(assetIndex.url, join(indexesDir, `${assetIndex.id}.json`), { size: assetIndex.size, sha1: assetIndex.sha1 })
 
   // El instalador oficial de Forge requiere que exista launcher_profiles.json
   const profilesPath = join(commonDir, 'launcher_profiles.json')
@@ -101,21 +49,23 @@ export async function ensureMinecraftVanilla(commonDir: string, onProgress: (det
 }
 
 export async function ensureForge(commonDir: string, javaPath: string, onProgress: (detail: string) => void): Promise<void> {
-  const forgeVersion = '1.20.1-forge-47.4.23'
+  const config = getConfig()
+  const forgeVersion = forgeVersionId(config)
   const forgeJson = join(commonDir, 'versions', forgeVersion, `${forgeVersion}.json`)
   
   try {
     const info = await stat(forgeJson)
     if (info.isFile()) {
-      onProgress('Forge 47.4.23 verificado.')
+      onProgress(`Forge ${config.forgeVersion} verificado.`)
       return
     }
   } catch {}
 
-  onProgress('Descargando instalador de Forge 47.4.23...')
-  const installerUrl = 'https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.4.23/forge-1.20.1-47.4.23-installer.jar'
+  onProgress(`Descargando instalador de Forge ${config.forgeVersion}...`)
+  const build = `${config.mcVersion}-${config.forgeVersion}`
+  const installerUrl = `https://maven.minecraftforge.net/net/minecraftforge/forge/${build}/forge-${build}-installer.jar`
   const installerJar = join(commonDir, 'forge-installer.jar')
-  await downloadFile(installerUrl, installerJar)
+  await download(installerUrl, installerJar)
 
   onProgress('Ejecutando instalador de Forge (puede tardar un minuto)...')
   return new Promise((resolve, reject) => {
@@ -161,7 +111,7 @@ export async function ensureDependencies(commonDir: string, onProgress: (detail:
   
   onProgress('Verificando dependencias de Minecraft...')
   const folder = MinecraftFolder.from(commonDir)
-  const v = await Version.parse(folder, '1.20.1-forge-47.4.23')
+  const v = await Version.parse(folder, forgeVersionId())
   
   const missingLibs = await diagnoseLibraries(v.libraries, folder, {})
   const missingAssetsRes = await diagnoseVersionAssets(v, {})
@@ -201,9 +151,9 @@ export async function ensureDependencies(commonDir: string, onProgress: (detail:
     const batch = toDownload.slice(i, i + chunk)
     await Promise.all(batch.map(async (item) => {
       try {
-        await downloadFile(item.url, item.dest, item.size, item.sha1)
+        await download(item.url, item.dest, { size: item.size, sha1: item.sha1 })
       } catch (e) {
-        console.error('Failed to download', item.url, e)
+        log.error('No se pudo descargar %s: %s', item.url, e instanceof Error ? e.message : String(e))
       }
       done++
       if (done % 50 === 0 || done === toDownload.length) {
@@ -249,17 +199,17 @@ export async function syncModpack(
     if (!zipBuffer || !entryMap) {
       const tag = version.startsWith('v') ? version : `v${version}`
       onProgress(`Descargando modpack.zip (${tag})...`)
-      let zipUrl = `https://github.com/zzyren/orvianmodpack/releases/download/${tag}/modpack.zip`
+      let zipUrl = `https://github.com/${getConfig().packRepo}/releases/download/${tag}/modpack.zip`
       let res = await fetch(zipUrl)
       if (!res.ok) {
         const altTag = version.startsWith('v') ? version.slice(1) : version
-        const altUrl = `https://github.com/zzyren/orvianmodpack/releases/download/${altTag}/modpack.zip`
+        const altUrl = `https://github.com/${getConfig().packRepo}/releases/download/${altTag}/modpack.zip`
         const altRes = await fetch(altUrl)
         if (altRes.ok) {
           res = altRes
           zipUrl = altUrl
         } else {
-          const latestUrl = `https://github.com/zzyren/orvianmodpack/releases/latest/download/modpack.zip`
+          const latestUrl = `https://github.com/${getConfig().packRepo}/releases/latest/download/modpack.zip`
           const latestRes = await fetch(latestUrl)
           if (latestRes.ok) {
             res = latestRes
@@ -337,17 +287,17 @@ export async function syncModpack(
   // ── Resumen de diagnóstico ───────────────────────────────────────────────
   const wasAlreadyCurrent = result.trustedFromState > 0 && result.installed === 0 && result.replaced === 0
   if (wasAlreadyCurrent) {
-    console.log(`[Launcher] Modpack v${version} ya estaba instalado correctamente.`)
-    console.log(`[Launcher]   → ${result.trustedFromState} archivos validados desde estado (sin descarga)`)
-    console.log(`[Launcher]   → ${result.unchanged} archivos verificados con SHA-256 (sin cambios)`)
+    log.info(`[Launcher] Modpack v${version} ya estaba instalado correctamente.`)
+    log.info(`[Launcher]   → ${result.trustedFromState} archivos validados desde estado (sin descarga)`)
+    log.info(`[Launcher]   → ${result.unchanged} archivos verificados con SHA-256 (sin cambios)`)
   } else {
-    console.log(`[Launcher] Sync del modpack v${version} completado:`)
-    console.log(`[Launcher]   → Instalados: ${result.installed}`)
-    console.log(`[Launcher]   → Reemplazados: ${result.replaced}`)
-    console.log(`[Launcher]   → Sin cambios (SHA-256): ${result.unchanged}`)
-    console.log(`[Launcher]   → Fast-path (confiados desde estado): ${result.trustedFromState}`)
-    console.log(`[Launcher]   → Configs preservadas: ${result.preservedConfigs}`)
-    console.log(`[Launcher]   → Defaults nuevos staged: ${result.stagedDefaults}`)
+    log.info(`[Launcher] Sync del modpack v${version} completado:`)
+    log.info(`[Launcher]   → Instalados: ${result.installed}`)
+    log.info(`[Launcher]   → Reemplazados: ${result.replaced}`)
+    log.info(`[Launcher]   → Sin cambios (SHA-256): ${result.unchanged}`)
+    log.info(`[Launcher]   → Fast-path (confiados desde estado): ${result.trustedFromState}`)
+    log.info(`[Launcher]   → Configs preservadas: ${result.preservedConfigs}`)
+    log.info(`[Launcher]   → Defaults nuevos staged: ${result.stagedDefaults}`)
   }
 
   return result
