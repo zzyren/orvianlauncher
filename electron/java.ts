@@ -78,12 +78,29 @@ export async function extractJreZip(zipPath: string, destDir: string, onProgress
   }
 }
 
-export async function ensureJava17(dataRoot: string, onProgress: (detail: string) => void): Promise<string> {
+const JAVA_STAMP = '.orvian-java.json'
+
+async function isFile(path: string): Promise<boolean> {
+  return stat(path).then((info) => info.isFile(), () => false)
+}
+
+/**
+ * `force` re-runs `javaw -version` even when a verification stamp exists (used by "repair").
+ * Without it, an install that was verified once is trusted, which saves a process spawn per launch.
+ */
+export async function ensureJava17(dataRoot: string, onProgress: (detail: string) => void, options: { force?: boolean } = {}): Promise<string> {
   const runtimeDir = join(dataRoot, 'runtime')
   const javaHome = join(runtimeDir, 'java-17')
   const javaw = join(javaHome, 'bin', 'javaw.exe')
+  const stampPath = join(javaHome, JAVA_STAMP)
+  const writeStamp = (): Promise<void> => writeFile(stampPath, JSON.stringify({ verifiedAt: Date.now() })).catch(() => undefined)
 
+  if (!options.force && (await isFile(javaw)) && (await isFile(stampPath))) {
+    onProgress('Java 17 verificado.')
+    return javaw
+  }
   if (await testJava(javaw)) {
+    await writeStamp()
     onProgress('Java 17 encontrado y verificado.')
     return javaw
   }
@@ -106,6 +123,7 @@ export async function ensureJava17(dataRoot: string, onProgress: (detail: string
     // Swap only after the new runtime is proven good, so a failed update never removes a working one.
     await rm(javaHome, { recursive: true, force: true })
     await rename(staging, javaHome)
+    await writeStamp()
   } catch (err) {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined)
     log.error('[Java] Instalación fallida: %s', err instanceof Error ? err.message : String(err))

@@ -5,7 +5,7 @@ const api = {
   getStatus: (opts?: { fresh?: boolean }) => ipcRenderer.invoke('launcher:status', opts),
   checkForUpdates: () => ipcRenderer.invoke('pack:check'),
   repair: () => ipcRenderer.invoke('pack:repair'),
-  play: () => ipcRenderer.invoke('game:play'),
+  play: (options?: { quickPlay?: boolean; playInstalled?: boolean }) => ipcRenderer.invoke('game:play', options),
   login: () => ipcRenderer.invoke('account:login'),
   cancelLogin: () => ipcRenderer.invoke('account:cancel-login'),
   logout: () => ipcRenderer.invoke('account:logout'),
@@ -76,6 +76,17 @@ const api = {
 }
 
 contextBridge.exposeInMainWorld('orvian', api)
-export type LauncherProgress = { state: string; progress: number; detail: string }
+export type LauncherProgress = {
+  state: string
+  /** Overall progress from 0 to 1. */
+  progress: number
+  detail: string
+  step?: 'java' | 'minecraft' | 'forge' | 'libraries' | 'modpack' | 'finalizing'
+  current?: number
+  total?: number
+  bytesDone?: number
+  bytesTotal?: number
+  bytesPerSecond?: number
+}
 export type PackStatus = { installedVersion: string | null; latestVersion: string | null; hasUpdate: boolean }
 export type { UpdaterEvent }
