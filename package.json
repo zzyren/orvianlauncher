@@ -1,0 +1,96 @@
+{
+  "name": "orvian-launcher",
+  "productName": "Orvian Launcher",
+  "version": "1.0.4",
+  "private": true,
+  "description": "Orvian Launcher",
+  "main": "dist-electron/electron/main.js",
+  "author": "Orvian",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build:electron": "tsc -p tsconfig.electron.json && node scripts/patch-electron-dev.cjs",
+    "build": "npm run build:electron && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:win:publish": "npm run build && electron-builder --win nsis --publish always",
+    "lint": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "postinstall": "node scripts/patch-xmcl.cjs && node scripts/patch-electron-dev.cjs"
+  },
+  "dependencies": {
+    "@xmcl/core": "^2.16.2",
+    "@xmcl/installer": "^6.3.4",
+    "@xmcl/user": "^4.4.2",
+    "electron-updater": "^6.6.2",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "yauzl": "^2.10.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "eslint": "^9.17.0",
+    "rcedit": "^5.0.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8",
+    "wait-on": "^8.0.1"
+  },
+  "overrides": {
+    "@xmcl/unzip": "2.0.0",
+    "uuid": "8.3.2"
+  },
+  "build": {
+    "appId": "com.orvian.launcher",
+    "productName": "Orvian Launcher",
+    "artifactName": "${name}-setup-${version}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/logo.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "public/logo.ico",
+      "uninstallerIcon": "public/logo.ico",
+      "shortcutName": "Orvian Launcher",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zzyren",
+        "repo": "orvianlauncher"
+      }
+    ]
+  }
+}

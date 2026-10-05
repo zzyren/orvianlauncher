@@ -1,0 +1,39 @@
+
+[block_entities]
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:trapped_chest" = "DISABLE"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:chest" = "DISABLE"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:shulker_box" = "DISABLE"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:bell" = "DISABLE"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:ender_chest" = "DISABLE"
+
+[entities]
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:furnace_minecart" = "DEFAULT"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:glow_item_frame" = "FORCE_ENABLE"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:spawner_minecart" = "DEFAULT"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:item_frame" = "FORCE_ENABLE"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:block_display" = "FORCE_ENABLE"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:chest_minecart" = "DEFAULT"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:item_display" = "FORCE_ENABLE"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:minecart" = "DEFAULT"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:item" = "FORCE_ENABLE"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:command_block_minecart" = "DEFAULT"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:tnt_minecart" = "DEFAULT"
+	#Allowed Values: DEFAULT, DISABLE, FORCE_ENABLE
+	"minecraft:hopper_minecart" = "DEFAULT"
+
