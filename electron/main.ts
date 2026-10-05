@@ -8,6 +8,7 @@ import { initLogger, log } from './logger'
 import { registerModsIpc } from './modManager'
 import { setUserAgent } from './net'
 import { isMinecraftRunning, killMinecraftProcess, registerLauncher } from './launcher'
+import { repairShortcuts } from './shortcuts'
 import { configureAutoUpdater, registerUpdaterIpc, scheduleUpdateCheck } from './updater'
 import {
   createMainWindow,
@@ -105,6 +106,7 @@ function start(): void {
 
   app.whenReady().then(async () => {
     lockDownSession()
+    if (isPackaged) repairShortcuts()
 
     // Splash first, before any work
     let splash = createSplashWindow()
