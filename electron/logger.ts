@@ -3,9 +3,9 @@ import { join } from 'node:path'
 import { format } from 'node:util'
 import { redactSecrets } from '../src/shared/redact'
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent'
 
-const ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 }
+const ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40, silent: 100 }
 
 export interface Logger {
   debug(message: string, ...args: unknown[]): void
@@ -102,7 +102,7 @@ export function createLogger(options: LoggerOptions = {}): Logger & { close(): v
     : null
   const mirror = options.mirrorConsole ?? !file
 
-  const emit = (lvl: LogLevel, message: string, args: unknown[]): void => {
+  const emit = (lvl: Exclude<LogLevel, 'silent'>, message: string, args: unknown[]): void => {
     if (ORDER[lvl] < ORDER[level]) return
     const line = redactSecrets(format(message, ...args))
     file?.write(`${now().toISOString()} ${lvl.toUpperCase().padEnd(5)} ${line}\n`)
