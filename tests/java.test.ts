@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { OrvianError } from '../src/shared/errors'
 import { extractJreZip, resolveEntryTarget, selectJreAsset } from '../electron/java'
@@ -43,7 +43,7 @@ describe('selectJreAsset', () => {
 
 describe('resolveEntryTarget', () => {
   it('strips the top-level folder and keeps the target inside the destination', () => {
-    expect(resolveEntryTarget('/rt/staging', 'jdk-17', 'jdk-17/bin/javaw.exe')).toBe('/rt/staging/bin/javaw.exe')
+    expect(resolveEntryTarget('/rt/staging', 'jdk-17', 'jdk-17/bin/javaw.exe')).toBe(resolve('/rt/staging/bin/javaw.exe'))
   })
   it('ignores directories and the root folder itself', () => {
     expect(resolveEntryTarget('/rt/staging', 'jdk-17', 'jdk-17/bin/')).toBeNull()

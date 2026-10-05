@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { assertInside, isInside, isSafeFileName } from '../src/shared/paths'
 
@@ -13,7 +14,7 @@ describe('isInside / assertInside', () => {
   )
 
   it('assertInside throws and returns the resolved path', () => {
-    expect(assertInside('/data/mods', '/data/mods/a.jar')).toBe('/data/mods/a.jar')
+    expect(assertInside('/data/mods', '/data/mods/a.jar')).toBe(resolve('/data/mods/a.jar'))
     expect(() => assertInside('/data/mods', '/data/mods/../a.jar')).toThrow()
   })
 })
