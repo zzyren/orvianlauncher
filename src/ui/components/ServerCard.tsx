@@ -1,4 +1,5 @@
-import { Copy, RefreshCw } from 'lucide-react'
+import { useState } from 'react'
+import { Copy, Eye, EyeOff, RefreshCw } from 'lucide-react'
 import type { ServerStatus } from '../../shared/launcher-state'
 import { Button, IconButton } from './Button'
 import { useToast } from './Toast'
@@ -19,6 +20,7 @@ const STATE_LABEL: Record<ServerStatus['state'], string> = {
 
 export function ServerCard({ server, onPlay, onRefresh }: ServerCardProps) {
   const toast = useToast()
+  const [revealed, setRevealed] = useState(false)
   const copyAddress = (): void => {
     navigator.clipboard
       .writeText(server.address)
@@ -43,7 +45,10 @@ export function ServerCard({ server, onPlay, onRefresh }: ServerCardProps) {
       {server.state === 'online' && server.motd && <p className="server-motd selectable">{server.motd}</p>}
       {server.state === 'offline' && <p className="server-motd">El servidor puede estar en reposo y arrancar al conectarte.</p>}
       <div className="server-address">
-        <code translate="no" className="selectable">{server.address}</code>
+        <code translate="no" className={revealed ? 'selectable' : undefined}>{revealed ? server.address : '•'.repeat(12)}</code>
+        <IconButton label={revealed ? 'Ocultar la dirección' : 'Mostrar la dirección'} onClick={() => setRevealed((v) => !v)}>
+          {revealed ? <EyeOff size={16} strokeWidth={1.75} aria-hidden="true" /> : <Eye size={16} strokeWidth={1.75} aria-hidden="true" />}
+        </IconButton>
         <IconButton label="Copiar la dirección" onClick={copyAddress}>
           <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
         </IconButton>
