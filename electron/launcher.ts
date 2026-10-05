@@ -14,6 +14,7 @@ import { AuthService } from './auth'
 import { isGameBusy, isMinecraftRunning, killMinecraftProcess, playGame, repairGame, type GameDeps, type PipelineResult } from './game/launch'
 import { registerAdminIpc } from './admin'
 import { ManifestPoller, ManifestProvider, readInstalledVersion, type PollResult } from './modpack/manifest'
+import { discardPendingConfigs, listPendingConfigs, restorePendingConfigs } from './modpack/pending'
 import { NewsService } from './news'
 import { resetLauncherData } from './reset'
 import { ServerMonitor } from './serverStatus'
@@ -114,7 +115,6 @@ export function registerLauncher(ipc: Ipc, dataRoot: string, hooks: LauncherHook
     if (installed === null || installed !== found.manifest.pack.version) {
       downloadBytes = await planUpdate(instance, found.manifest.files).then((plan) => plan.bytesToDownload, () => undefined)
     }
-    broadcast('pack:status', { installedVersion: installed, latestVersion: found.manifest.pack.version, hasUpdate: installed !== null && installed !== found.manifest.pack.version })
     store.setPack(
       { version: found.manifest.pack.version, minimumLauncher: found.manifest.minimumLauncher, source: found.source, changelog: found.manifest.changelog },
       installed,
@@ -166,7 +166,6 @@ export function registerLauncher(ipc: Ipc, dataRoot: string, hooks: LauncherHook
     emit: (event) => {
       if (event.state === 'playing') store.markRunning()
       else store.applyProgress(event)
-      broadcast('launcher:progress', event)
     },
     onPackSynced: (version) => {
       poller.note(version, version)
@@ -211,28 +210,11 @@ export function registerLauncher(ipc: Ipc, dataRoot: string, hooks: LauncherHook
     (_event, options) => runPipeline('installing', () => playGame(gameDeps, options ?? {}))
   )
   ipc.handle('pack:repair', [], () => runPipeline('repairing', () => repairGame(gameDeps)))
-  ipc.handle('launcher:dismiss-error', [], () => store.dismissError())
-
-  // ─── Compatibility with the pre-store window code (removed together with the old App in the UI rework) ──
-  ipc.handle('launcher:status', [z.object({ fresh: z.boolean().optional() }).optional()], async (_event, opts) => {
-    if (opts?.fresh) await refreshPack(true)
-    const state = store.getState()
-    return {
-      appVersion: state.appVersion,
-      packVersion: state.pack.latest,
-      installedVersion: state.pack.installed,
-      hasUpdate: state.pack.hasUpdate,
-      ready: state.pack.latest !== null && state.account !== null,
-      authenticated: state.account !== null,
-      playerName: state.account?.name ?? null,
-      playerUuid: state.account?.uuid ?? null,
-      isAdmin: state.isAdmin,
-      ramGb: state.settings.ramGb,
-      configured: state.pack.latest !== null,
-      isPlaying: isMinecraftRunning(),
-      offline: state.pack.offline
-    }
+  ipc.handle('game:kill', [], () => {
+    // The exit watcher reports the end of the process, which clears the "running" state
+    killMinecraftProcess()
   })
+  ipc.handle('launcher:dismiss-error', [], () => store.dismissError())
 
   // ─── Manual check ─────────────────────────────────────────────────────────
   ipc.handle('pack:check', [], async () => {
@@ -260,6 +242,20 @@ export function registerLauncher(ipc: Ipc, dataRoot: string, hooks: LauncherHook
     }
   })
 
+  // ─── Config files the pack wanted to change but the player had edited ───────
+  const guardIdle = (): void => {
+    if (isMinecraftRunning() || isGameBusy()) throw new Error('Espera a que termine la partida o la instalación en curso.')
+  }
+  ipc.handle('pack:pending-configs', [], () => listPendingConfigs(instance))
+  ipc.handle('pack:restore-configs', [], async () => {
+    guardIdle()
+    return restorePendingConfigs(instance)
+  })
+  ipc.handle('pack:discard-configs', [], async () => {
+    guardIdle()
+    await discardPendingConfigs(instance)
+  })
+
   // ─── Account ──────────────────────────────────────────────────────────────
   ipc.handle('account:login', [], async (event) => {
     store.setSigningIn(true)
@@ -269,7 +265,7 @@ export function registerLauncher(ipc: Ipc, dataRoot: string, hooks: LauncherHook
       store.setAccount({ name: account.name, uuid: account.uuid }, isAdminUuid(account.uuid))
       return { ok: true, message: 'Sesión iniciada con éxito.' }
     } catch (error) {
-      return { ok: false, message: userMessage(error) }
+      return { ok: false, message: userMessage(error), cancelled: toPayload(error).code === 'AUTH_CANCELLED' }
     } finally {
       store.setSigningIn(false)
     }
@@ -297,9 +293,11 @@ export function registerLauncher(ipc: Ipc, dataRoot: string, hooks: LauncherHook
     return { ok: true }
   })
 
-  ipc.handle('folder:open', [z.enum(['mods', 'shaders', 'resourcepacks', 'logs'])], async (_event, kind) => {
+  ipc.handle('folder:open', [z.enum(['mods', 'shaders', 'resourcepacks', 'logs', 'game', 'crash-reports'])], async (_event, kind) => {
     const folders: Record<typeof kind, string> = {
       logs: join(dataRoot, 'launcher', 'logs'),
+      game: instance,
+      'crash-reports': join(instance, 'crash-reports'),
       mods: join(instance, 'mods'),
       shaders: join(instance, 'shaderpacks'),
       resourcepacks: join(instance, 'resourcepacks')
@@ -373,7 +371,7 @@ export function registerLauncher(ipc: Ipc, dataRoot: string, hooks: LauncherHook
   registerAdminIpc(ipc, {
     dataRoot,
     getAccount: () => authService.loadAccount(),
-    emitProgress: (state, progress, detail) => broadcast('launcher:progress', { state, progress, detail }),
+    emitProgress: (state, progress, detail) => broadcast('admin:progress', { state, progress, detail }),
     getLatestVersion: () => provider.peek()?.manifest.pack.version ?? null,
     getMinimumLauncher: () => provider.peek()?.manifest.minimumLauncher,
     onPublished: (manifest, version) => {

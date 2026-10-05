@@ -34,7 +34,9 @@ try {
             ],
             { stdio: 'ignore' }
           );
-        } catch (_) {}
+        } catch (err) {
+          console.warn('[patch-electron-dev] rcedit failed for', target, err.message);
+        }
       };
 
       applyRcedit(orvianExe);

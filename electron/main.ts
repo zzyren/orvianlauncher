@@ -7,7 +7,7 @@ import { initLogger, log } from './logger'
 import { registerModsIpc } from './modManager'
 import { setUserAgent } from './net'
 import { isMinecraftRunning, killMinecraftProcess, registerLauncher } from './launcher'
-import { configureAutoUpdater, registerUpdaterIpc, scheduleUpdateCheck, setUpdaterWindow } from './updater'
+import { configureAutoUpdater, registerUpdaterIpc, scheduleUpdateCheck } from './updater'
 import {
   createMainWindow,
   createSplashWindow,
@@ -16,6 +16,7 @@ import {
   isTrustedAppUrl,
   lockDownSession,
   positionTrayWindow,
+  setSplashStatus,
   showWindow
 } from './windows'
 
@@ -103,6 +104,7 @@ function start(): void {
     let splash = createSplashWindow()
     const splashStartTime = Date.now()
 
+    setSplashStatus(splash, 'Preparando el launcher…', 0.1)
     await mkdir(join(dataRoot, 'launcher', 'logs'), { recursive: true })
     await mkdir(join(dataRoot, 'instances', 'orvian'), { recursive: true })
 
@@ -111,7 +113,7 @@ function start(): void {
       isUiVisible: () => [mainWindow, trayWindow].some((win) => win !== null && !win.isDestroyed() && win.isVisible() && !win.isMinimized())
     })
     registerModsIpc(ipc, dataRoot)
-    registerUpdaterIpc(ipc, () => mainWindow)
+    registerUpdaterIpc(ipc)
 
     ipc.handle('window:minimize', [], () => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize()
@@ -149,7 +151,11 @@ function start(): void {
     })
 
     // Account and settings are loaded before the window is shown
-    const launcherReady = launcher.init().catch((err: unknown) => log.error('Fallo al iniciar el launcher: %s', String(err)))
+    setSplashStatus(splash, 'Cargando tu cuenta…', 0.35)
+    const launcherReady = launcher
+      .init()
+      .catch((err: unknown) => log.error('Fallo al iniciar el launcher: %s', String(err)))
+      .then(() => setSplashStatus(splash, 'Abriendo el launcher…', 1))
 
     // The renderer reports once mounted; keep the splash up for at least minSplashMs
     let splashClosed = false
@@ -157,8 +163,6 @@ function start(): void {
       if (splashClosed) return
       splashClosed = true
       if (mainWindow && !mainWindow.isDestroyed()) {
-        // Connect the updater to the window before showing it so events arrive from the start
-        setUpdaterWindow(mainWindow)
         mainWindow.show()
         mainWindow.focus()
       }
