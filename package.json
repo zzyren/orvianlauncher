@@ -16,7 +16,8 @@
     "dist:win": "npm run build && electron-builder --win nsis",
     "dist:win:publish": "npm run build && electron-builder --win nsis --publish always",
     "lint": "eslint . && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
-    "postinstall": "node scripts/patch-electron-dev.cjs"
+    "postinstall": "node scripts/patch-electron-dev.cjs",
+    "test:e2e": "npm run build && playwright test"
   },
   "dependencies": {
     "@xmcl/core": "^2.16.2",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.9.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
@@ -92,7 +94,8 @@
       {
         "provider": "github",
         "owner": "zzyren",
-        "repo": "orvianlauncher"
+        "repo": "orvianlauncher",
+        "releaseType": "draft"
       }
     ]
   }
