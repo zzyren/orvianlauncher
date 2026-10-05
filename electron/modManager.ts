@@ -1,5 +1,7 @@
-import { IpcMain } from 'electron'
 import { join } from 'node:path'
+import { z } from 'zod'
+import type { Ipc } from './ipc'
+import { log } from './logger'
 import { readdir, stat, rm, readFile, writeFile, mkdir } from 'node:fs/promises'
 
 type MetadataFile = Record<string, { dependencies: string[] }>
@@ -20,12 +22,12 @@ async function saveCustomMetadata(instance: string, data: MetadataFile) {
   await writeFile(join(p, 'custom-mods.json'), JSON.stringify(data, null, 2))
 }
 
-export function registerModsIpc(ipc: IpcMain, dataRoot: string) {
+export function registerModsIpc(ipc: Ipc, dataRoot: string) {
   const instance = join(dataRoot, 'instances', 'orvian')
   const modsDir = join(instance, 'mods')
   const statePath = join(instance, '.orvian', 'official-state.json')
 
-  ipc.handle('mods:list', async () => {
+  ipc.handle('mods:list', [], async () => {
     let officialFiles: Record<string, string> = {}
     try {
       const stateContent = await readFile(statePath, 'utf8')
@@ -72,7 +74,7 @@ export function registerModsIpc(ipc: IpcMain, dataRoot: string) {
     return mods
   })
 
-  ipc.handle('mods:delete', async (_event, filename: string) => {
+  ipc.handle('mods:delete', [z.string().min(1).max(255)], async (_event, filename) => {
     if (!filename.endsWith('.jar') || filename.includes('/') || filename.includes('\\')) {
       throw new Error('Nombre de archivo inválido.')
     }
@@ -88,7 +90,7 @@ export function registerModsIpc(ipc: IpcMain, dataRoot: string) {
     return { ok: true }
   })
 
-  ipc.handle('mods:search-modrinth', async (_event, query: string) => {
+  ipc.handle('mods:search-modrinth', [z.string().max(200)], async (_event, query) => {
     const facets = [
       ["categories:forge"],
       ["versions:1.20.1"]
@@ -135,14 +137,14 @@ export function registerModsIpc(ipc: IpcMain, dataRoot: string) {
             installedDeps.push(depFilename)
           }
         } catch (e) {
-          console.error('Error instalando dependencia de Modrinth:', e)
+          log.error('Error instalando dependencia de Modrinth:', e)
         }
       }
     }
     return filename
   }
 
-  ipc.handle('mods:install-modrinth', async (_event, projectId: string) => {
+  ipc.handle('mods:install-modrinth', [z.string().regex(/^[A-Za-z0-9]{1,64}$/)], async (_event, projectId) => {
     const installedDeps: string[] = []
     const visited = new Set<string>()
     const filename = await installModrinthMod(projectId, installedDeps, visited)
@@ -154,7 +156,7 @@ export function registerModsIpc(ipc: IpcMain, dataRoot: string) {
     return { ok: true, filename, dependencies: installedDeps }
   })
 
-  ipc.handle('mods:search-curseforge', async (_event, query: string) => {
+  ipc.handle('mods:search-curseforge', [z.string().max(200)], async (_event, query) => {
     const url = `https://api.curse.tools/v1/mods/search?gameId=432&classId=6&searchFilter=${encodeURIComponent(query)}&gameVersion=1.20.1&modLoaderType=1&pageSize=20`
     const res = await fetch(url, { headers: { 'User-Agent': 'OrvianLauncher/1.0', 'Accept': 'application/json' } })
     if (!res.ok) throw new Error('Fallo al buscar en CurseForge')
@@ -210,7 +212,7 @@ export function registerModsIpc(ipc: IpcMain, dataRoot: string) {
             installedDeps.push(depFilename)
           }
         } catch (e) {
-          console.error('Error instalando dependencia de CurseForge:', e)
+          log.error('Error instalando dependencia de CurseForge:', e)
         }
       }
     }
@@ -218,7 +220,7 @@ export function registerModsIpc(ipc: IpcMain, dataRoot: string) {
     return filename
   }
 
-  ipc.handle('mods:install-curseforge', async (_event, modId: string | number) => {
+  ipc.handle('mods:install-curseforge', [z.union([z.number().int().positive(), z.string().regex(/^\d{1,10}$/)])], async (_event, modId) => {
     const installedDeps: string[] = []
     const visited = new Set<string>()
     const filename = await installCurseForgeMod(modId, installedDeps, visited)

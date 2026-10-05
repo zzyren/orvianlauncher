@@ -2,24 +2,15 @@ import { MicrosoftAuthenticator } from '@xmcl/user'
 import { BrowserWindow, safeStorage, session } from 'electron'
 import { join } from 'node:path'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { getConfig } from './config'
+import { fetchWithTimeout } from './net'
 
-const CLIENT_ID = '00000000402b5328' // Standard Minecraft Client ID
 const REDIRECT_URI = 'https://login.live.com/oauth20_desktop.srf'
 
 export type AccountInfo = {
   accessToken: string
   name: string
   uuid: string
-}
-
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 15000): Promise<Response> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    return await fetch(url, { ...init, signal: controller.signal })
-  } finally {
-    clearTimeout(timer)
-  }
 }
 
 export class AuthService {
@@ -76,7 +67,7 @@ export class AuthService {
 
       authWindow.setMenu(null)
 
-      const authUrl = `https://login.live.com/oauth20_authorize.srf?client_id=${CLIENT_ID}&response_type=code&redirect_uri=${REDIRECT_URI}&scope=XboxLive.signin%20offline_access&prompt=select_account`
+      const authUrl = `https://login.live.com/oauth20_authorize.srf?client_id=${getConfig().msClientId}&response_type=code&redirect_uri=${REDIRECT_URI}&scope=XboxLive.signin%20offline_access&prompt=select_account`
       
       authWindow.webContents.on('will-redirect', async (event, url) => {
         if (url.startsWith(REDIRECT_URI)) {
@@ -94,7 +85,7 @@ export class AuthService {
             const tokenRes = await fetchWithTimeout('https://login.live.com/oauth20_token.srf', {
               method: 'POST',
               body: new URLSearchParams({
-                client_id: CLIENT_ID,
+                client_id: getConfig().msClientId,
                 code: code,
                 grant_type: 'authorization_code',
                 redirect_uri: REDIRECT_URI

@@ -2,8 +2,7 @@ import { join } from 'node:path'
 import { stat, mkdir, rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { open, readAllEntries, readEntry } from '@xmcl/unzip'
-import { createWriteStream } from 'node:fs'
-import { pipeline } from 'node:stream/promises'
+import { download } from './net'
 
 const ADOPTIUM_URL = 'https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse?project=jdk'
 
@@ -21,20 +20,8 @@ export async function ensureJava17(dataRoot: string, onProgress: (detail: string
   await mkdir(join(dataRoot, 'runtime'), { recursive: true })
   const zipPath = join(dataRoot, 'runtime', 'java-17.zip')
 
-  // Timeout de 120s para la descarga de Java (puede ser grande ~60 MB)
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 120_000)
-  let res: Response
-  try {
-    res = await fetch(ADOPTIUM_URL, { redirect: 'follow', signal: controller.signal })
-  } finally {
-    clearTimeout(timeoutId)
-  }
-
-  if (!res.ok || !res.body) throw new Error(`Fallo al descargar Java 17 (HTTP ${res.status}): ${res.statusText}`)
-  
-  const { Readable } = require('node:stream')
-  await pipeline(Readable.fromWeb(res.body as any), createWriteStream(zipPath))
+  // Idle timeout instead of a whole-transfer timeout: the JRE is ~60 MB and may be slow but steady.
+  await download(ADOPTIUM_URL, zipPath, { idleTimeoutMs: 60_000 })
 
   onProgress('Extrayendo Java 17...')
   await rm(javaHome, { recursive: true, force: true })
