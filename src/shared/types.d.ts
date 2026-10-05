@@ -32,16 +32,21 @@ declare global {
       logout(): Promise<{ ok: boolean }>
       setRam(gb: number): Promise<{ ok: boolean }>
       openFolder(kind: 'mods' | 'shaders' | 'resourcepacks' | 'logs'): Promise<{ ok: boolean; error: string }>
-      resetInstallation(): Promise<{ ok: boolean; message: string }>
-      pickMrpack(): Promise<{ canceled: boolean; filePath: string | null; fileName: string | null }>
-      publishUpdate(params: { mrpackPath: string; version: string; changelog: string; githubToken: string }): Promise<{ ok: boolean; releaseUrl: string; message: string }>
+      /** Wipes launcher data. Worlds, screenshots, packs and options are kept unless `deleteWorlds` is true. */
+      resetInstallation(options?: { deleteWorlds: boolean }): Promise<{ ok: boolean; message: string; preserved: string[] }>
+      pickMrpack(): Promise<{ canceled: boolean; selectionId: string | null; fileName: string | null; size: number }>
+      publishUpdate(params: { selectionId: string; version: string; changelog: string; overwrite?: boolean }): Promise<{ ok: boolean; releaseUrl: string; message: string }>
+      /** The publishing token lives only in the main process; the renderer can never read it back. */
+      adminTokenStatus(): Promise<{ hasToken: boolean; canEncrypt: boolean }>
+      adminSetToken(token: string): Promise<{ ok: boolean; verified: boolean }>
+      adminClearToken(): Promise<{ ok: boolean }>
       openExternal(url: string): Promise<void>
-      listMods(): Promise<Array<{ filename: string; isOfficial: boolean; size: number; dependencies: string[]; requiredBy: string[] }>>
+      listMods(): Promise<Array<{ filename: string; isOfficial: boolean; size: number; dependencies: string[]; requiredBy: string[]; projectId?: string; platform?: 'modrinth' | 'curseforge' }>>
       deleteMod(filename: string): Promise<{ ok: boolean }>
       searchModrinth(query: string): Promise<{ hits: Array<{ project_id: string; title: string; description: string; icon_url: string; author: string }> }>
-      installModrinth(projectId: string): Promise<{ ok: boolean; filename: string; dependencies?: string[] }>
+      installModrinth(projectId: string): Promise<{ ok: boolean; filename: string; dependencies?: string[]; failedDependencies?: string[] }>
       searchCurseForge(query: string): Promise<{ hits: Array<{ project_id: string; title: string; description: string; icon_url: string; author: string; downloads?: number }> }>
-      installCurseForge(modId: string | number): Promise<{ ok: boolean; filename: string; dependencies?: string[] }>
+      installCurseForge(modId: string | number): Promise<{ ok: boolean; filename: string; dependencies?: string[]; failedDependencies?: string[] }>
       minimizeWindow(): Promise<void>
       toggleMaximizeWindow(): Promise<boolean>
       closeWindow(): Promise<void>

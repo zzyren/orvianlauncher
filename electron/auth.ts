@@ -3,6 +3,7 @@ import { BrowserWindow, safeStorage, session } from 'electron'
 import { join } from 'node:path'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { getConfig } from './config'
+import { log } from './logger'
 import { fetchWithTimeout } from './net'
 
 const REDIRECT_URI = 'https://login.live.com/oauth20_desktop.srf'
@@ -21,31 +22,39 @@ export class AuthService {
     this.accountFile = join(dataRoot, 'launcher', 'auth.json')
   }
 
+  /** Session kept in memory so a machine without secure storage still works until the app closes. */
+  private memory: AccountInfo | null = null
+
   async loadAccount(): Promise<AccountInfo | null> {
+    if (this.memory) return this.memory
+    if (!safeStorage.isEncryptionAvailable()) return null
     try {
       const encrypted = await readFile(this.accountFile, 'utf8')
-      const json = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(Buffer.from(encrypted, 'hex')) : encrypted
-      return JSON.parse(json) as AccountInfo
+      return JSON.parse(safeStorage.decryptString(Buffer.from(encrypted, 'hex'))) as AccountInfo
     } catch {
       return null
     }
   }
 
   async saveAccount(info: AccountInfo | null) {
+    this.memory = info
     await mkdir(join(this.accountFile, '..'), { recursive: true })
     if (!info) {
       const { rm } = await import('node:fs/promises')
-      await rm(this.accountFile, { force: true }).catch(() => {})
-      // Limpiar también la sesión persistente de cookies de Microsoft
+      await rm(this.accountFile, { force: true }).catch(() => undefined)
+      // Also clear the persistent Microsoft cookie session
       try {
-        const msSession = session.fromPartition('persist:microsoft-auth')
-        await msSession.clearStorageData()
-      } catch {}
+        await session.fromPartition('persist:microsoft-auth').clearStorageData()
+      } catch (err) {
+        log.warn('[Auth] No se pudo limpiar la sesión de Microsoft: %s', String(err))
+      }
       return
     }
-    const json = JSON.stringify(info)
-    const data = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(json).toString('hex') : json
-    await writeFile(this.accountFile, data, 'utf8')
+    if (!safeStorage.isEncryptionAvailable()) {
+      log.warn('[Auth] El almacenamiento seguro no está disponible: la sesión no se guardará en disco.')
+      return
+    }
+    await writeFile(this.accountFile, safeStorage.encryptString(JSON.stringify(info)).toString('hex'), 'utf8')
   }
 
   async loginWithMicrosoft(parent?: BrowserWindow): Promise<AccountInfo> {

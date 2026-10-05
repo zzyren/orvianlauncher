@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { LogIn, LogOut, HardDrive, Wrench, X, Link2, Shield, Trash2, UploadCloud, FileArchive, CheckCircle2, ExternalLink, Minus, Square, Copy, Power, Loader2, RefreshCw } from 'lucide-react'
 import CustomDialog from './CustomDialog'
+import { ipcErrorMessage } from './ipcError'
 
 type Status = { 
   appVersion: string
@@ -52,10 +53,24 @@ export default function App() {
   }
 
   // Estados del publicador de updates (Admin)
-  const [mrpackFile, setMrpackFile] = useState<{ path: string; name: string } | null>(null)
+  const [mrpackFile, setMrpackFile] = useState<{ selectionId: string; name: string } | null>(null)
   const [newVersion, setNewVersion] = useState('')
   const [changelog, setChangelog] = useState('')
-  const [githubToken, setGithubToken] = useState(() => localStorage.getItem('orvian_admin_gh_token') || '')
+  const [tokenInput, setTokenInput] = useState('')
+  const [tokenStatus, setTokenStatus] = useState<{ hasToken: boolean; canEncrypt: boolean } | null>(null)
+  const [tokenBusy, setTokenBusy] = useState(false)
+  const [tokenMessage, setTokenMessage] = useState<string | null>(null)
+  // Older versions kept the publishing token in localStorage. Take it out of there immediately and
+  // hand it to the main process (encrypted) the first time the admin panel opens.
+  const legacyTokenRef = useRef('')
+  useEffect(() => {
+    // In an effect (not during render) so React StrictMode's double invocation cannot lose the value.
+    const legacy = localStorage.getItem('orvian_admin_gh_token')
+    if (legacy) {
+      legacyTokenRef.current = legacy
+      localStorage.removeItem('orvian_admin_gh_token')
+    }
+  }, [])
   const [publishSuccess, setPublishSuccess] = useState<string | null>(null)
   const [publishStep, setPublishStep] = useState<string | null>(null)
   const [publishError, setPublishError] = useState<string | null>(null)
@@ -207,14 +222,14 @@ export default function App() {
     try {
       localStorage.clear()
       sessionStorage.clear()
-      setGithubToken('')
+      setTokenInput('')
       setMrpackFile(null)
       setNewVersion('')
       setChangelog('')
       setPublishSuccess(null)
       setPublishError(null)
 
-      const result = await window.orvian.resetInstallation()
+      const result = await window.orvian.resetInstallation({ deleteWorlds: false })
       if (result.ok) {
         setView('home')
         setRam(6)
@@ -233,8 +248,53 @@ export default function App() {
     }
   }
 
+  const saveToken = async () => {
+    setTokenBusy(true)
+    setTokenMessage(null)
+    try {
+      const result = await window.orvian.adminSetToken(tokenInput.trim())
+      setTokenInput('')
+      setTokenStatus(await window.orvian.adminTokenStatus())
+      setTokenMessage(result.verified ? 'Token guardado y verificado.' : 'Token guardado. No se pudo comprobar su acceso (¿sin conexión?).')
+    } catch (err) {
+      setTokenMessage(ipcErrorMessage(err))
+    } finally {
+      setTokenBusy(false)
+    }
+  }
+
+  const removeToken = async () => {
+    setTokenBusy(true)
+    setTokenMessage(null)
+    try {
+      await window.orvian.adminClearToken()
+      setTokenStatus(await window.orvian.adminTokenStatus())
+    } catch (err) {
+      setTokenMessage(ipcErrorMessage(err))
+    } finally {
+      setTokenBusy(false)
+    }
+  }
+
   const ready = status?.ready ?? false
   const isAdmin = status?.isAdmin ?? false
+
+  useEffect(() => {
+    if (view !== 'admin' || !isAdmin) return
+    void (async () => {
+      try {
+        const legacy = legacyTokenRef.current
+        legacyTokenRef.current = ''
+        if (legacy) {
+          // A token that no longer works is simply dropped: it was already removed from localStorage.
+          await window.orvian.adminSetToken(legacy).catch(() => undefined)
+        }
+        setTokenStatus(await window.orvian.adminTokenStatus())
+      } catch (err) {
+        setTokenMessage(ipcErrorMessage(err))
+      }
+    })()
+  }, [view, isAdmin])
 
   return (
     <div className="lunar-shell">
@@ -532,8 +592,8 @@ export default function App() {
                   
                   <div className="mrpack-dropzone" onClick={async () => {
                     const res = await window.orvian.pickMrpack()
-                    if (!res.canceled && res.filePath && res.fileName) {
-                      setMrpackFile({ path: res.filePath, name: res.fileName })
+                    if (!res.canceled && res.selectionId && res.fileName) {
+                      setMrpackFile({ selectionId: res.selectionId, name: res.fileName })
                       // Autodetectar posible versión a partir del nombre
                       const vMatch = res.fileName.match(/v?(\d+\.\d+(\.\d+)?(-[a-zA-Z0-9.]+)?)/)
                       if (vMatch && !newVersion) {
@@ -573,27 +633,46 @@ export default function App() {
 
                   <div className="admin-form-group">
                     <div className="admin-label-row">
-                      <label>GitHub Personal Access Token (Classic)</label>
-                      <button 
-                        type="button" 
+                      <label htmlFor="admin-token">Token de GitHub para publicar</label>
+                      <button
+                        type="button"
                         className="admin-help-link"
-                        onClick={() => void window.orvian.openExternal('https://github.com/settings/tokens/new?description=Orvian+Modpack+Publisher&scopes=repo')}
+                        onClick={() => void window.orvian.openExternal('https://github.com/settings/personal-access-tokens/new')}
                       >
-                        <ExternalLink size={12} /> Generar token en GitHub
+                        <ExternalLink size={12} /> Crear token en GitHub
                       </button>
                     </div>
-                    <input 
-                      type="password" 
-                      className="admin-input" 
-                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" 
-                      value={githubToken} 
-                      onChange={(e) => {
-                        setGithubToken(e.target.value)
-                        localStorage.setItem('orvian_admin_gh_token', e.target.value)
-                      }} 
-                    />
+                    {tokenStatus?.hasToken ? (
+                      <div className="admin-token-saved">
+                        <span className="admin-hint">Token guardado de forma segura en este equipo.</span>
+                        <button type="button" className="lunar-action-btn" disabled={tokenBusy} onClick={() => void removeToken()}>
+                          Quitar token
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <input
+                          id="admin-token"
+                          type="password"
+                          className="admin-input"
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder="github_pat_…"
+                          value={tokenInput}
+                          disabled={tokenBusy || tokenStatus?.canEncrypt === false}
+                          onChange={(e) => setTokenInput(e.target.value)}
+                        />
+                        <button type="button" className="lunar-action-btn" disabled={tokenBusy || !tokenInput.trim()} onClick={() => void saveToken()}>
+                          Guardar token
+                        </button>
+                      </>
+                    )}
+                    {tokenStatus?.canEncrypt === false && (
+                      <span className="admin-hint" role="alert">Este equipo no permite guardar secretos de forma segura, así que no se puede guardar el token.</span>
+                    )}
+                    {tokenMessage && <span className="admin-hint" role="status">{tokenMessage}</span>}
                     <span className="admin-hint">
-                      Pulsa en <strong>"Generar token en GitHub"</strong> arriba para abrir la página con el permiso <code>repo</code> ya marcado. Haz clic abajo en <em>"Generate token"</em> y pega aquí el texto que empieza por <code>ghp_</code>.
+                      Usa un token <em>fine-grained</em> limitado al repositorio <code>zzyren/orvianmodpack</code> con el permiso <strong>Contents: Read and write</strong>. Se guarda cifrado y la interfaz no puede volver a leerlo.
                     </span>
                   </div>
 
@@ -627,9 +706,9 @@ export default function App() {
 
                   <button 
                     className="publish-submit-btn" 
-                    disabled={busy || !mrpackFile || !newVersion.trim() || !githubToken.trim()}
+                    disabled={busy || !mrpackFile || !newVersion.trim() || !tokenStatus?.hasToken}
                     onClick={async () => {
-                      if (!mrpackFile || !newVersion.trim() || !githubToken.trim()) return
+                      if (!mrpackFile || !newVersion.trim() || !tokenStatus?.hasToken) return
                       setError(null)
                       setPublishError(null)
                       setPublishSuccess(null)
@@ -638,16 +717,15 @@ export default function App() {
 
                       try {
                         const res = await window.orvian.publishUpdate({
-                          mrpackPath: mrpackFile.path,
+                          selectionId: mrpackFile.selectionId,
                           version: newVersion.trim(),
-                          changelog: changelog.trim(),
-                          githubToken: githubToken.trim()
+                          changelog: changelog.trim()
                         })
                         setPublishSuccess(res.releaseUrl)
                         setMessage(`¡Versión ${newVersion} publicada en GitHub!`)
                         refreshStatus()
                       } catch (err) {
-                        const errMsg = err instanceof Error ? err.message : String(err)
+                        const errMsg = ipcErrorMessage(err)
                         setPublishError(errMsg)
                         setError(errMsg)
                       } finally {
@@ -687,8 +765,8 @@ export default function App() {
         isOpen={factoryResetDialogOpen}
         type="danger"
         title="¿Restablecer launcher de fábrica?"
-        message="Esta acción borrará absolutamente todos los datos locales y configuraciones."
-        detail={'• Se cerrará la sesión y cuenta de Microsoft guardada\n• Se borrarán mods personalizados añadidos y configuraciones\n• Se eliminarán archivos locales de Minecraft, modpack y Java\n• Se limpiarán datos locales de administrador\n\nEl launcher quedará exactamente como recién instalado.'}
+        message="Esta acción borrará los datos y la configuración del launcher."
+        detail={'• Se cerrará la sesión y cuenta de Microsoft guardada\n• Se borrarán mods personalizados añadidos y configuraciones\n• Se eliminarán archivos locales de Minecraft, modpack y Java\n• Se quitará el token de publicación, si lo hay\n\nSe conservarán tus mundos, capturas, resourcepacks, shaders y opciones del juego.'}
         confirmText="Restablecer de fábrica"
         cancelText="Cancelar"
         onConfirm={async () => {

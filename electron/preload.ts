@@ -10,10 +10,13 @@ const api = {
   logout: () => ipcRenderer.invoke('account:logout'),
   setRam: (gb: number) => ipcRenderer.invoke('settings:ram', gb),
   openFolder: (kind: 'mods' | 'shaders' | 'resourcepacks' | 'logs') => ipcRenderer.invoke('folder:open', kind),
-  resetInstallation: () => ipcRenderer.invoke('admin:reset'),
-  pickMrpack: () => ipcRenderer.invoke('admin:pick-mrpack'),
-  publishUpdate: (params: { mrpackPath: string; version: string; changelog: string; githubToken: string }) =>
-    ipcRenderer.invoke('admin:publish-update', params),
+  resetInstallation: (options: { deleteWorlds: boolean } = { deleteWorlds: false }) => ipcRenderer.invoke('launcher:reset', options),
+  pickMrpack: () => ipcRenderer.invoke('admin:pick-archive'),
+  publishUpdate: (params: { selectionId: string; version: string; changelog: string; overwrite?: boolean }) =>
+    ipcRenderer.invoke('admin:publish', params),
+  adminTokenStatus: () => ipcRenderer.invoke('admin:token-status'),
+  adminSetToken: (token: string) => ipcRenderer.invoke('admin:token-set', token),
+  adminClearToken: () => ipcRenderer.invoke('admin:token-clear'),
   openExternal: (url: string) => ipcRenderer.invoke('url:open', url),
   listMods: () => ipcRenderer.invoke('mods:list'),
   deleteMod: (filename: string) => ipcRenderer.invoke('mods:delete', filename),

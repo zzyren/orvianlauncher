@@ -32,9 +32,7 @@ export default tseslint.config(
     files: [
       'electron/services.ts',
       'electron/minecraft.ts',
-      'electron/modManager.ts',
       'electron/publisher.ts',
-      'electron/java.ts',
       'electron/auth.ts',
       'electron/updater.ts',
       'electron/preload.ts',

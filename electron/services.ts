@@ -1,6 +1,6 @@
-import { app, shell, BrowserWindow, dialog, Notification, session } from 'electron'
+import { app, shell, BrowserWindow, Notification, session } from 'electron'
 import { z } from 'zod'
-import { basename, join, resolve, sep } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { readFile, writeFile } from 'node:fs/promises'
 import type { ChildProcess } from 'node:child_process'
 import { execSync } from 'node:child_process'
@@ -14,7 +14,8 @@ import { AuthService } from './auth'
 import { ensureJava17 } from './java'
 import { ensureMinecraftVanilla, ensureForge, ensureDependencies, syncModpack } from './minecraft'
 import { Version, launch, createMinecraftProcessWatcher } from '@xmcl/core'
-import { buildManifestFromPrismZip, publishReleaseToGitHub } from './publisher'
+import { registerAdminIpc } from './admin'
+import { resetLauncherData } from './reset'
 import os from 'node:os'
 
 let isPlaying = false
@@ -188,7 +189,7 @@ export function registerLauncherIpc(ipc: Ipc, dataRoot: string) {
   const common = join(dataRoot, 'common')
   const authService = new AuthService(dataRoot)
 
-  const emitProgress = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent, state: string, progress: number, detail: string) => {
+  const emitProgress = (_event: unknown, state: string, progress: number, detail: string) => {
     BrowserWindow.getAllWindows().forEach(win => {
       if (!win.isDestroyed()) {
         win.webContents.send('launcher:progress', { state, progress, detail })
@@ -532,114 +533,48 @@ export function registerLauncherIpc(ipc: Ipc, dataRoot: string) {
     return { ok: !error, error }
   })
 
-  ipc.handle('admin:reset', [], async () => {
-    if (isPlaying) {
-      throw new Error('No puedes restablecer el launcher mientras Minecraft se esté ejecutando.')
+  ipc.handle('launcher:reset', [z.object({ deleteWorlds: z.boolean() })], async (_event, options) => {
+    if (isPlaying || isBusy) {
+      throw new Error('No puedes restablecer el launcher mientras haya una partida o una instalación en curso.')
     }
 
-    const { readdir, rm, mkdir } = await import('node:fs/promises')
-    
-    // 1. Borrar absolutamente todos los archivos y carpetas dentro de dataRoot
-    try {
-      const entries = await readdir(dataRoot).catch(() => [] as string[])
-      for (const entry of entries) {
-        await rm(join(dataRoot, entry), { recursive: true, force: true }).catch(() => {})
-      }
-    } catch {}
+    const { preserved } = await resetLauncherData(dataRoot, options)
 
-    // 2. Limpiar completamente las sesiones persistentes de Electron (cuentas Microsoft y almacenamiento web)
-    try {
-      const msSession = session.fromPartition('persist:microsoft-auth')
-      await msSession.clearStorageData()
-    } catch {}
-    try {
-      await session.defaultSession.clearStorageData()
-    } catch {}
+    // Clear persistent Electron sessions (Microsoft account cookies and web storage)
+    for (const clear of [
+      () => session.fromPartition('persist:microsoft-auth').clearStorageData(),
+      () => session.defaultSession.clearStorageData()
+    ]) {
+      await clear().catch((err: unknown) => log.warn('[Reset] No se pudo limpiar una sesión: %s', String(err)))
+    }
 
-    // 3. Recrear la estructura inicial mínima para que el launcher funcione como recién instalado
-    await mkdir(join(dataRoot, 'launcher', 'logs'), { recursive: true }).catch(() => {})
-    await mkdir(join(dataRoot, 'instances', 'orvian'), { recursive: true }).catch(() => {})
-
-    // 4. Resetear estado de tracking en memoria
+    // Reset in-memory tracking
     inMemoryManifest = null
     lastKnownLatest = null
     lastKnownInstalled = null
 
-    return { ok: true, message: 'Launcher restablecido de fábrica. Todo ha quedado como nuevo.' }
+    log.info('[Reset] Launcher restablecido (mundos %s)', options.deleteWorlds ? 'eliminados' : 'conservados')
+    return {
+      ok: true,
+      preserved,
+      message: options.deleteWorlds
+        ? 'Launcher restablecido de fábrica. Todo ha quedado como nuevo.'
+        : 'Launcher restablecido. Se conservaron tus mundos, capturas, resourcepacks, shaders y opciones.'
+    }
   })
 
-  ipc.handle('admin:pick-mrpack', [], async (event) => {
-    const account = await authService.loadAccount()
-    if (!account || !isAdminUuid(account.uuid)) {
-      throw new Error('No tienes permisos de administrador para realizar esta acción.')
+  registerAdminIpc(ipc, {
+    dataRoot,
+    getAccount: () => authService.loadAccount(),
+    emitProgress: (state, progress, detail) => emitProgress(null, state, progress, detail),
+    getLatestVersion: () => lastKnownLatest,
+    onPublished: (manifest, version) => {
+      // The admin already runs the new version: refresh the local cache and tell every window.
+      void writeFile(join(dataRoot, 'launcher', 'orvian-manifest.json'), JSON.stringify(manifest, null, 2), 'utf8').catch(() => undefined)
+      inMemoryManifest = { manifest, timestamp: Date.now() }
+      lastKnownLatest = version
+      broadcastModpackStatus(lastKnownInstalled, version)
     }
-    const win = BrowserWindow.fromWebContents(event.sender)
-    const result = await dialog.showOpenDialog(win ?? BrowserWindow.getFocusedWindow()!, {
-      title: 'Seleccionar modpack exportado de Prism Launcher (.zip)',
-      filters: [
-        { name: 'Prism Launcher / Minecraft ZIP', extensions: ['zip', 'mrpack'] },
-        { name: 'Todos los archivos', extensions: ['*'] }
-      ],
-      properties: ['openFile']
-    })
-    if (result.canceled || result.filePaths.length === 0) {
-      return { canceled: true, filePath: null, fileName: null }
-    }
-    const path = result.filePaths[0]
-    return { canceled: false, filePath: path, fileName: basename(path) }
-  })
-
-  ipc.handle('admin:publish-update', [z.object({
-    mrpackPath: z.string().min(1).max(1024),
-    version: z.string().min(1).max(64),
-    changelog: z.string().max(10_000),
-    githubToken: z.string().min(1).max(512)
-  })], async (event, params) => {
-    const account = await authService.loadAccount()
-    if (!account || !isAdminUuid(account.uuid)) {
-      throw new Error('No tienes permisos de administrador para publicar actualizaciones.')
-    }
-
-    const { mrpackPath, version, changelog, githubToken } = params
-    if (!mrpackPath || !version || !githubToken) {
-      throw new Error('Faltan campos requeridos (archivo ZIP, versión o token de GitHub).')
-    }
-
-    emitProgress(event, 'publishing', 0.1, 'Leyendo archivo ZIP de Prism Launcher...')
-    const zipBuffer = await readFile(mrpackPath)
-
-    const changelogLines = changelog.split('\n').map(l => l.trim()).filter(Boolean)
-
-    emitProgress(event, 'publishing', 0.3, 'Generando manifiesto de Orvian...')
-    const { manifest } = await buildManifestFromPrismZip(
-      zipBuffer,
-      version,
-      changelogLines,
-      getConfig().packRepo,
-      (detail, p) => emitProgress(event, 'publishing', p ?? 0.4, detail)
-    )
-
-    emitProgress(event, 'publishing', 0.6, 'Publicando release en GitHub...')
-    const result = await publishReleaseToGitHub({
-      token: githubToken,
-      repo: getConfig().packRepo,
-      version,
-      changelog,
-      manifest,
-      zipBuffer,
-      onProgress: (detail, p) => emitProgress(event, 'publishing', p ?? 0.8, detail)
-    })
-
-    // Actualizar la caché local para que el admin ya tenga la versión activa
-    const cachedManifestPath = join(dataRoot, 'launcher', 'orvian-manifest.json')
-    await writeFile(cachedManifestPath, JSON.stringify(manifest, null, 2), 'utf8').catch(() => {})
-    inMemoryManifest = { manifest, timestamp: Date.now() }
-
-    // Notificar a todas las ventanas que hay una nueva versión publicada
-    lastKnownLatest = version
-    broadcastModpackStatus(lastKnownInstalled, version)
-
-    return { ok: true, releaseUrl: result.releaseUrl, message: `¡Versión ${version} publicada correctamente en GitHub!` }
   })
 
   ipc.handle('url:open', [z.string().max(2048)], async (_event, url) => {
