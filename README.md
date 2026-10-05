@@ -15,7 +15,7 @@ Launcher de escritorio para Windows del servidor privado **Orvian**. Con un solo
 | Instalación | Java 17 (Adoptium, verificado por SHA-256), Minecraft, Forge, librerías y assets, con progreso por pasos y por bytes. |
 | Modpack | Se descarga de GitHub Releases. Cada archivo se verifica por SHA-256 y se escribe de forma atómica. Las configuraciones editadas por el jugador se conservan. |
 | Sin conexión | Con el modpack ya instalado se puede jugar sin red. |
-| Servidor | Estado en vivo (en línea, jugadores, latencia) y botón «Jugar en el servidor». |
+| Servidor | Estado en vivo (en línea, jugadores, latencia). |
 | Novedades | Cambios de la versión actual y de las anteriores, tomados de las releases del modpack. |
 | Mods | Lista de mods instalados e instalación desde Modrinth y CurseForge, con verificación de hash. |
 | Fallos del juego | Si Minecraft se cierra con error, muestra un resumen y abre el informe. |

@@ -24,7 +24,7 @@ Lo que las pruebas automáticas no pueden comprobar (necesita Windows, una cuent
 - [ ] Instalar sobre la versión anterior: se conservan la sesión, la instancia y los ajustes.
 - [ ] Primera instalación en una máquina limpia: Java, Minecraft, Forge y modpack, con progreso por pasos.
 - [ ] Iniciar sesión con Microsoft y cancelar a mitad de camino desde el launcher.
-- [ ] «Jugar» abre Minecraft; el multijugador conecta; «Jugar en el servidor» entra directo.
+- [ ] «Jugar» abre Minecraft y entra directo al servidor.
 - [ ] Sesión de más de 24 h: el multijugador sigue funcionando (renovación silenciosa). Se puede forzar
       editando la caducidad guardada o esperando.
 - [ ] Sin conexión (desconecta la red) con el modpack instalado: «Jugar sin conexión» arranca.

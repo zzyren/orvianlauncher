@@ -1,12 +1,10 @@
 import { Copy, RefreshCw } from 'lucide-react'
 import type { ServerStatus } from '../../shared/launcher-state'
-import { Button, IconButton } from './Button'
+import { IconButton } from './Button'
 import { useToast } from './Toast'
 
 interface ServerCardProps {
   server: ServerStatus
-  /** Offered only when the launcher can start the game right now. */
-  onPlay?: () => void
   onRefresh: () => void
 }
 
@@ -17,7 +15,7 @@ const STATE_LABEL: Record<ServerStatus['state'], string> = {
   offline: 'Sin conexión'
 }
 
-export function ServerCard({ server, onPlay, onRefresh }: ServerCardProps) {
+export function ServerCard({ server, onRefresh }: ServerCardProps) {
   const toast = useToast()
   const copyAddress = (): void => {
     navigator.clipboard
@@ -48,9 +46,6 @@ export function ServerCard({ server, onPlay, onRefresh }: ServerCardProps) {
           <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
         </IconButton>
       </div>
-      {onPlay && (
-        <Button variant="secondary" onClick={onPlay} disabled={server.state === 'offline'}>Jugar en el servidor</Button>
-      )}
     </section>
   )
 }

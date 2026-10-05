@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen, MoreHorizontal, Wrench, Server } from 'lucide-react'
+import { FolderOpen, MoreHorizontal, Wrench } from 'lucide-react'
 import { getPrimaryAction, type LauncherState, type PrimaryActionId } from '../../shared/launcher-state'
 import { formatDuration } from '../../shared/format'
 import { useDelayedFlag } from '../hooks/useDelayedFlag'
@@ -10,19 +10,17 @@ import { ProgressBar } from './ProgressBar'
 interface PlayActionProps {
   state: LauncherState
   onAction: (action: PrimaryActionId) => void
-  onPlayOnServer: () => void
   onRepair: () => void
   onKill: () => void
 }
 
 /** The one big button. Its text and behaviour come from `getPrimaryAction`, shared with the tray. */
-export function PlayAction({ state, onAction, onPlayOnServer, onRepair, onKill }: PlayActionProps) {
+export function PlayAction({ state, onAction, onRepair, onKill }: PlayActionProps) {
   const { phase } = state
   const primary = getPrimaryAction(state)
   const working = phase.kind === 'installing' || phase.kind === 'repairing'
   const indeterminate = useDelayedFlag(phase.kind === 'launching' || phase.kind === 'checking')
   const elapsed = useElapsed(phase.kind === 'running' ? phase.startedAt : null)
-  const canPlay = primary.enabled && (primary.action === 'play' || primary.action === 'play-installed')
   const idle = !working && phase.kind !== 'launching' && phase.kind !== 'running' && phase.kind !== 'signing-in' && phase.kind !== 'booting'
 
   return (
@@ -46,7 +44,6 @@ export function PlayAction({ state, onAction, onPlayOnServer, onRepair, onKill }
           className="play-menu"
           trigger={<MoreHorizontal size={20} strokeWidth={1.75} aria-hidden="true" />}
           items={[
-            { label: 'Jugar en el servidor', icon: <Server size={16} strokeWidth={1.75} aria-hidden="true" />, disabled: !canPlay, onSelect: onPlayOnServer },
             { label: 'Reparar ahora', icon: <Wrench size={16} strokeWidth={1.75} aria-hidden="true" />, disabled: !idle || state.account === null, onSelect: onRepair },
             { label: 'Abrir la carpeta de mods', icon: <FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />, onSelect: () => void window.orvian.openFolder('mods') }
           ]}

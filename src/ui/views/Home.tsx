@@ -23,16 +23,10 @@ const STEP_ANNOUNCEMENTS = {
 export default function Home({ state }: { state: LauncherState }) {
   const { phase, pack } = state
   const { perform, performErrorAction } = useLauncherActions()
-  const toast = useToast()
   const [killOpen, setKillOpen] = useState(false)
 
   const working = phase.kind === 'installing' || phase.kind === 'repairing'
   const announcement = useStepAnnouncement(phase.kind === 'installing' || phase.kind === 'repairing' ? phase.progress.step : null)
-
-  const playOnServer = (): void => {
-    window.orvian.play({ quickPlay: true, playInstalled: state.pack.offline }).catch(() => toast({ kind: 'error', message: 'No se pudo iniciar el juego.' }))
-  }
-  const canQuickPlay = phase.kind === 'ready' || phase.kind === 'update-available' || phase.kind === 'offline-ready' || phase.kind === 'crashed'
 
   return (
     <div className="home view-enter">
@@ -46,7 +40,6 @@ export default function Home({ state }: { state: LauncherState }) {
           <PlayAction
             state={state}
             onAction={(action) => void perform(action)}
-            onPlayOnServer={playOnServer}
             onRepair={() => void perform('repair')}
             onKill={() => setKillOpen(true)}
           />
@@ -69,7 +62,7 @@ export default function Home({ state }: { state: LauncherState }) {
         </section>
 
         <aside className="home-side" aria-label="Servidor y novedades">
-          <ServerCard server={state.server} onRefresh={() => void window.orvian.refreshServer()} onPlay={canQuickPlay ? playOnServer : undefined} />
+          <ServerCard server={state.server} onRefresh={() => void window.orvian.refreshServer()} />
           <NewsList items={state.news} />
         </aside>
       </div>
