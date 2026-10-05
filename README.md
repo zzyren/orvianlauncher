@@ -1,4 +1,5 @@
 # Orvian Launcher
+<<<<<<< HEAD
 
 Aplicación Electron + React + TypeScript para Windows, con una frontera IPC aislada entre interfaz y procesos Node. La marca, shell visual, validación de manifiesto, clasificación de ficheros oficiales, planificación incremental, comprobación SHA-256 y guardado de RAM están iniciados.
 
@@ -35,3 +36,10 @@ La pantalla expone esos pasos como no configurados; los IPC actuales responden c
 ## Licencias
 
 El core de XMCL se publica bajo MIT según el repositorio. Auditar licencias de cada dependencia y de cada mod, respetar atribuciones, y no redistribuir mods que no permitan distribución directa. Las credenciales/token no deben escribirse en logs; incorporar almacenamiento seguro del sistema operativo antes de persistir sesión Microsoft.
+=======
+Custom launcher developed with [Antigravity](https://antigravity.google/) and [Claude Code](https://claude.ai/code) for the private Orvian server.
+
+This launcher automatically downloads and manages the official modpack from the OrvianModpack repository, ensuring all players have the correct setup with minimal effort.
+
+Designed exclusively for a friends-only environment, it provides a simple, consistent, and streamlined way to join and play on the server.
+>>>>>>> 3aff7d1f7c02e70a43612f5bb5e6c571ab21d113
