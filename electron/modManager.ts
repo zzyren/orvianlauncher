@@ -1,165 +1,228 @@
-import { IpcMain } from 'electron'
-import { join } from 'node:path'
-import { readdir, stat, rm, readFile, writeFile, mkdir } from 'node:fs/promises'
+import { basename, join } from 'node:path'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { z } from 'zod'
+import { OrvianError } from '../src/shared/errors'
+import { assertInside, isSafeFileName } from '../src/shared/paths'
+import { getConfig } from './config'
+import type { Ipc } from './ipc'
+import { log } from './logger'
+import { download, fetchJson } from './net'
 
-type MetadataFile = Record<string, { dependencies: string[] }>
+type Platform = 'modrinth' | 'curseforge'
+type ModMeta = { dependencies: string[]; projectId?: string; platform?: Platform; versionId?: string; sha1?: string }
+type MetadataFile = Record<string, ModMeta>
 
-async function getCustomMetadata(instance: string): Promise<MetadataFile> {
+const MAX_MOD_BYTES = 200 * 1024 * 1024
+const MODRINTH_HOSTS = ['cdn.modrinth.com']
+const CURSEFORGE_HOSTS = ['forgecdn.net']
+
+export interface VerifiedModFile {
+  url: string
+  filename: string
+  size?: number
+  sha1?: string
+  sha512?: string
+}
+
+function unverifiable(file: string, reason: string): OrvianError {
+  return new OrvianError('DOWNLOAD_UNVERIFIABLE', { file, reason }, { message: `Descarga no verificable (${reason}): ${file}` })
+}
+
+/** A mod file name from a remote API is untrusted input: it must be a plain `.jar` name. */
+export function sanitizeModFilename(name: unknown): string {
+  if (!isSafeFileName(name, ['.jar'])) {
+    throw new OrvianError('DOWNLOAD_FAILED', { file: typeof name === 'string' ? name.slice(0, 60) : '', reason: 'invalid-filename' }, { message: 'El servicio devolvió un nombre de archivo no válido.' })
+  }
+  return name
+}
+
+export function assertAllowedHost(url: string, suffixes: readonly string[], file: string): string {
+  let host = ''
   try {
-    const p = join(instance, '.orvian', 'custom-mods.json')
-    const c = await readFile(p, 'utf8')
-    return JSON.parse(c)
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:') throw new Error('not https')
+    host = parsed.hostname.toLowerCase()
   } catch {
-    return {}
+    throw unverifiable(file, 'enlace no válido')
+  }
+  if (!suffixes.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) throw unverifiable(file, `host no permitido: ${host}`)
+  return url
+}
+
+interface ModrinthFile {
+  url?: string
+  filename?: string
+  primary?: boolean
+  size?: number
+  hashes?: { sha1?: string; sha512?: string }
+}
+
+export function pickModrinthFile(files: ModrinthFile[] | undefined): VerifiedModFile {
+  const file = files?.find((f) => f.primary) ?? files?.[0]
+  if (!file) throw new OrvianError('DOWNLOAD_FAILED', { reason: 'no-file' }, { message: 'La versión no incluye archivos descargables.' })
+  const filename = sanitizeModFilename(file.filename)
+  const { sha1, sha512 } = file.hashes ?? {}
+  if (!sha1 && !sha512) throw unverifiable(filename, 'el servicio no publica un hash')
+  return { url: assertAllowedHost(String(file.url), MODRINTH_HOSTS, filename), filename, size: file.size, sha1, sha512 }
+}
+
+interface CurseForgeFile {
+  id?: number
+  fileName?: string
+  downloadUrl?: string | null
+  fileLength?: number
+  hashes?: Array<{ value?: string; algo?: number }>
+}
+
+export function pickCurseForgeFile(file: CurseForgeFile): VerifiedModFile {
+  const filename = sanitizeModFilename(file.fileName)
+  // algo 1 is SHA-1; MD5 (algo 2) is not strong enough to trust a download with.
+  const sha1 = file.hashes?.find((h) => h.algo === 1)?.value
+  if (!sha1) throw unverifiable(filename, 'CurseForge no publica un SHA-1')
+  let url = file.downloadUrl
+  if (!url && file.id) url = `https://edge.forgecdn.net/files/${Math.floor(file.id / 1000)}/${file.id % 1000}/${encodeURIComponent(filename)}`
+  if (!url) throw unverifiable(filename, 'sin enlace de descarga')
+  return { url: assertAllowedHost(url, CURSEFORGE_HOSTS, filename), filename, size: file.fileLength, sha1 }
+}
+
+async function readJsonFile<T>(path: string, fallback: T): Promise<T> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as T
+  } catch {
+    return fallback
   }
 }
 
-async function saveCustomMetadata(instance: string, data: MetadataFile) {
-  const p = join(instance, '.orvian')
-  await mkdir(p, { recursive: true }).catch(() => {})
-  await writeFile(join(p, 'custom-mods.json'), JSON.stringify(data, null, 2))
-}
-
-export function registerModsIpc(ipc: IpcMain, dataRoot: string) {
+export function registerModsIpc(ipc: Ipc, dataRoot: string): void {
   const instance = join(dataRoot, 'instances', 'orvian')
   const modsDir = join(instance, 'mods')
   const statePath = join(instance, '.orvian', 'official-state.json')
+  const metaPath = join(instance, '.orvian', 'custom-mods.json')
 
-  ipc.handle('mods:list', async () => {
-    let officialFiles: Record<string, string> = {}
-    try {
-      const stateContent = await readFile(statePath, 'utf8')
-      const state = JSON.parse(stateContent)
-      officialFiles = state.files || {}
-    } catch {}
+  const getMeta = (): Promise<MetadataFile> => readJsonFile<MetadataFile>(metaPath, {})
+  async function saveMeta(data: MetadataFile): Promise<void> {
+    await mkdir(join(instance, '.orvian'), { recursive: true })
+    await writeFile(metaPath, JSON.stringify(data, null, 2))
+  }
 
-    const officialSet = new Set<string>()
-    for (const key of Object.keys(officialFiles)) {
-      if (key.startsWith('mods/')) {
-        officialSet.add(key.slice(5).toLowerCase()) // remove 'mods/'
-      }
+  /** Lower-cased names of the mods that ship with the modpack. */
+  async function officialMods(): Promise<Set<string>> {
+    const state = await readJsonFile<{ files?: Record<string, string> }>(statePath, {})
+    const names = new Set<string>()
+    for (const key of Object.keys(state.files ?? {})) {
+      if (key.startsWith('mods/')) names.add(key.slice(5).toLowerCase())
+    }
+    return names
+  }
+
+  // Installs touch the same folder and metadata file, so they run one at a time.
+  let queue: Promise<unknown> = Promise.resolve()
+  function enqueue<T>(job: () => Promise<T>): Promise<T> {
+    const run = queue.then(job, job)
+    queue = run.catch(() => undefined)
+    return run
+  }
+
+  async function placeMod(file: VerifiedModFile): Promise<void> {
+    const target = assertInside(modsDir, join(modsDir, file.filename))
+    await mkdir(modsDir, { recursive: true })
+    await download(file.url, target, { sha512: file.sha512, sha1: file.sha512 ? undefined : file.sha1, size: file.size, maxBytes: MAX_MOD_BYTES })
+    log.info('[Mods] Instalado %s', file.filename)
+  }
+
+  ipc.handle('mods:list', [], async () => {
+    const official = await officialMods()
+    const meta = await getMeta()
+    const reverse: Record<string, string[]> = {}
+    for (const [mod, data] of Object.entries(meta)) {
+      for (const dep of data.dependencies ?? []) (reverse[dep] ??= []).push(mod)
     }
 
-    const customMeta = await getCustomMetadata(instance)
-    const reverseMeta: Record<string, string[]> = {}
-    
-    for (const [mod, data] of Object.entries(customMeta)) {
-      for (const dep of data.dependencies) {
-        if (!reverseMeta[dep]) reverseMeta[dep] = []
-        reverseMeta[dep].push(mod)
-      }
+    const mods: Array<{ filename: string; isOfficial: boolean; size: number; dependencies: string[]; requiredBy: string[]; projectId?: string; platform?: Platform }> = []
+    const files = await readdir(modsDir).catch(() => [] as string[])
+    for (const file of files) {
+      if (!file.endsWith('.jar')) continue
+      const info = await stat(join(modsDir, file)).catch(() => null)
+      if (!info?.isFile()) continue
+      mods.push({
+        filename: file,
+        isOfficial: official.has(file.toLowerCase()),
+        size: info.size,
+        dependencies: meta[file]?.dependencies ?? [],
+        requiredBy: reverse[file] ?? [],
+        projectId: meta[file]?.projectId,
+        platform: meta[file]?.platform
+      })
     }
-
-    const mods: Array<{ filename: string; isOfficial: boolean; size: number; dependencies: string[]; requiredBy: string[] }> = []
-    try {
-      const files = await readdir(modsDir)
-      for (const file of files) {
-        if (!file.endsWith('.jar')) continue
-        const fileStat = await stat(join(modsDir, file)).catch(() => null)
-        if (!fileStat || !fileStat.isFile()) continue
-        
-        const isOfficial = officialSet.has(file.toLowerCase())
-        mods.push({ 
-          filename: file, 
-          isOfficial, 
-          size: fileStat.size,
-          dependencies: customMeta[file]?.dependencies || [],
-          requiredBy: reverseMeta[file] || []
-        })
-      }
-    } catch {}
-
     return mods
   })
 
-  ipc.handle('mods:delete', async (_event, filename: string) => {
-    if (!filename.endsWith('.jar') || filename.includes('/') || filename.includes('\\')) {
-      throw new Error('Nombre de archivo inválido.')
-    }
-    const filePath = join(modsDir, filename)
-    await rm(filePath, { force: true }).catch(()=>{})
+  ipc.handle('mods:delete', [z.string().min(1).max(255)], async (_event, filename) => {
+    if (basename(filename) !== filename || !filename.toLowerCase().endsWith('.jar')) throw new Error('Nombre de archivo inválido.')
+    if ((await officialMods()).has(filename.toLowerCase())) throw new Error('Los mods oficiales del modpack no se pueden eliminar.')
+    await rm(assertInside(modsDir, join(modsDir, filename)), { force: true })
 
-    const meta = await getCustomMetadata(instance)
+    const meta = await getMeta()
     if (meta[filename]) {
       delete meta[filename]
-      await saveCustomMetadata(instance, meta)
+      await saveMeta(meta)
     }
-
     return { ok: true }
   })
 
-  ipc.handle('mods:search-modrinth', async (_event, query: string) => {
-    const facets = [
-      ["categories:forge"],
-      ["versions:1.20.1"]
-    ]
-    const url = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query)}&facets=${encodeURIComponent(JSON.stringify(facets))}&limit=20`
-    const res = await fetch(url, { headers: { 'User-Agent': 'OrvianLauncher/1.0' } })
-    if (!res.ok) throw new Error('Fallo al buscar en Modrinth')
-    return res.json()
+  ipc.handle('mods:search-modrinth', [z.string().max(200)], async (_event, query) => {
+    const facets = encodeURIComponent(JSON.stringify([['categories:forge'], [`versions:${getConfig().mcVersion}`]]))
+    return fetchJson(`https://api.modrinth.com/v2/search?query=${encodeURIComponent(query)}&facets=${facets}&limit=20`)
   })
 
-  async function installModrinthMod(projectId: string, installedDeps: string[], visited: Set<string>): Promise<string> {
-    if (visited.has(projectId)) return ""
+  async function installModrinthMod(projectId: string, installed: string[], failed: string[], visited: Set<string>, official: Set<string>, isRoot: boolean): Promise<{ filename: string; versionId?: string; sha1?: string }> {
     visited.add(projectId)
-
-    const url = `https://api.modrinth.com/v2/project/${projectId}/version?loaders=["forge"]&game_versions=["1.20.1"]`
-    const res = await fetch(url, { headers: { 'User-Agent': 'OrvianLauncher/1.0' } })
-    if (!res.ok) throw new Error(`Fallo al obtener versiones para el proyecto ${projectId}`)
-    const versions = await res.json()
-    if (!versions || versions.length === 0) throw new Error(`No hay versiones compatibles para el mod ${projectId}.`)
-    
+    const loaders = encodeURIComponent('["forge"]')
+    const gameVersions = encodeURIComponent(JSON.stringify([getConfig().mcVersion]))
+    const versions = await fetchJson<Array<{ id?: string; files?: ModrinthFile[]; dependencies?: Array<{ dependency_type?: string; project_id?: string }> }>>(
+      `https://api.modrinth.com/v2/project/${projectId}/version?loaders=${loaders}&game_versions=${gameVersions}`
+    )
+    if (!versions?.length) throw new Error(`No hay versiones compatibles para el mod ${projectId}.`)
     const latest = versions[0]
-    const primaryFile = latest.files.find((f: any) => f.primary) || latest.files[0]
-    if (!primaryFile) throw new Error(`No se encontró el archivo de descarga para ${projectId}.`)
-    
-    const downloadUrl = primaryFile.url
-    const filename = primaryFile.filename
-    const targetPath = join(modsDir, filename)
-    
-    const fileExists = await stat(targetPath).then(() => true).catch(() => false)
-    if (!fileExists) {
-      await mkdir(modsDir, { recursive: true }).catch(() => {})
-      const downloadRes = await fetch(downloadUrl)
-      if (!downloadRes.ok) throw new Error(`Fallo al descargar ${filename}.`)
-      const arrayBuffer = await downloadRes.arrayBuffer()
-      await writeFile(targetPath, Buffer.from(arrayBuffer))
+    const file = pickModrinthFile(latest.files)
+
+    if (official.has(file.filename.toLowerCase())) {
+      if (isRoot) throw new Error(`${file.filename} ya forma parte del modpack oficial.`)
+      return { filename: file.filename }
     }
-    
-    const deps = latest.dependencies || []
-    for (const dep of deps) {
-      if (dep.dependency_type === 'required' && dep.project_id) {
-        try {
-          const depFilename = await installModrinthMod(dep.project_id, installedDeps, visited)
-          if (depFilename && !installedDeps.includes(depFilename)) {
-            installedDeps.push(depFilename)
-          }
-        } catch (e) {
-          console.error('Error instalando dependencia de Modrinth:', e)
-        }
+    await placeMod(file)
+
+    for (const dep of latest.dependencies ?? []) {
+      if (dep.dependency_type !== 'required' || !dep.project_id || visited.has(dep.project_id)) continue
+      if (!/^[A-Za-z0-9]{1,64}$/.test(dep.project_id)) continue
+      try {
+        const child = await installModrinthMod(dep.project_id, installed, failed, visited, official, false)
+        if (!installed.includes(child.filename)) installed.push(child.filename)
+      } catch (err) {
+        failed.push(dep.project_id)
+        log.error('[Mods] Falló la dependencia de Modrinth %s: %s', dep.project_id, err instanceof Error ? err.message : String(err))
       }
     }
-    return filename
+    return { filename: file.filename, versionId: latest.id, sha1: file.sha1 }
   }
 
-  ipc.handle('mods:install-modrinth', async (_event, projectId: string) => {
-    const installedDeps: string[] = []
-    const visited = new Set<string>()
-    const filename = await installModrinthMod(projectId, installedDeps, visited)
-    
-    const meta = await getCustomMetadata(instance)
-    meta[filename] = { dependencies: installedDeps }
-    await saveCustomMetadata(instance, meta)
+  ipc.handle('mods:install-modrinth', [z.string().regex(/^[A-Za-z0-9]{1,64}$/)], (_event, projectId) =>
+    enqueue(async () => {
+      const installed: string[] = []
+      const failed: string[] = []
+      const root = await installModrinthMod(projectId, installed, failed, new Set(), await officialMods(), true)
+      const meta = await getMeta()
+      meta[root.filename] = { dependencies: installed, projectId, platform: 'modrinth', versionId: root.versionId, sha1: root.sha1 }
+      await saveMeta(meta)
+      return { ok: true, filename: root.filename, dependencies: installed, failedDependencies: failed }
+    })
+  )
 
-    return { ok: true, filename, dependencies: installedDeps }
-  })
-
-  ipc.handle('mods:search-curseforge', async (_event, query: string) => {
-    const url = `https://api.curse.tools/v1/mods/search?gameId=432&classId=6&searchFilter=${encodeURIComponent(query)}&gameVersion=1.20.1&modLoaderType=1&pageSize=20`
-    const res = await fetch(url, { headers: { 'User-Agent': 'OrvianLauncher/1.0', 'Accept': 'application/json' } })
-    if (!res.ok) throw new Error('Fallo al buscar en CurseForge')
-    const json = await res.json()
-    const hits = (json.data || []).map((mod: any) => ({
+  ipc.handle('mods:search-curseforge', [z.string().max(200)], async (_event, query) => {
+    const json = await fetchJson<{ data?: Array<{ id: number; name: string; summary?: string; logo?: { thumbnailUrl?: string; url?: string }; authors?: Array<{ name?: string }>; downloadCount?: number }> }>(
+      `https://api.curse.tools/v1/mods/search?gameId=432&classId=6&searchFilter=${encodeURIComponent(query)}&gameVersion=${getConfig().mcVersion}&modLoaderType=1&pageSize=20`
+    )
+    const hits = (json.data ?? []).map((mod) => ({
       project_id: String(mod.id),
       title: mod.name,
       description: mod.summary || '',
@@ -170,63 +233,45 @@ export function registerModsIpc(ipc: IpcMain, dataRoot: string) {
     return { hits }
   })
 
-  async function installCurseForgeMod(modId: string | number, installedDeps: string[], visited: Set<string>): Promise<string> {
-    const modIdStr = String(modId)
-    if (visited.has(modIdStr)) return ""
-    visited.add(modIdStr)
+  async function installCurseForgeMod(modId: string, installed: string[], failed: string[], visited: Set<string>, official: Set<string>, isRoot: boolean): Promise<{ filename: string; versionId?: string; sha1?: string }> {
+    visited.add(modId)
+    const json = await fetchJson<{ data?: Array<CurseForgeFile & { dependencies?: Array<{ relationType?: number; modId?: number }> }> }>(
+      `https://api.curse.tools/v1/mods/${modId}/files?gameVersion=${getConfig().mcVersion}&modLoaderType=1`
+    )
+    const latest = json.data?.[0]
+    if (!latest) throw new Error(`No hay versiones compatibles (Forge ${getConfig().mcVersion}) en CurseForge para ${modId}.`)
+    const file = pickCurseForgeFile(latest)
 
-    const url = `https://api.curse.tools/v1/mods/${modId}/files?gameVersion=1.20.1&modLoaderType=1`
-    const res = await fetch(url, { headers: { 'User-Agent': 'OrvianLauncher/1.0', 'Accept': 'application/json' } })
-    if (!res.ok) throw new Error(`Fallo al obtener archivos de CurseForge para ${modId}`)
-    const json = await res.json()
-    const files = json.data || []
-    if (!files || files.length === 0) throw new Error(`No hay versiones compatibles (Forge 1.20.1) en CurseForge para ${modId}.`)
-
-    const file = files[0]
-    const filename = file.fileName
-    let downloadUrl = file.downloadUrl
-    if (!downloadUrl && file.id) {
-      downloadUrl = `https://edge.forgecdn.net/files/${Math.floor(file.id / 1000)}/${file.id % 1000}/${file.fileName}`
+    if (official.has(file.filename.toLowerCase())) {
+      if (isRoot) throw new Error(`${file.filename} ya forma parte del modpack oficial.`)
+      return { filename: file.filename }
     }
-    if (!downloadUrl) throw new Error(`No se encontró el enlace de descarga para ${modId}.`)
+    await placeMod(file)
 
-    const targetPath = join(modsDir, filename)
-    
-    const fileExists = await stat(targetPath).then(() => true).catch(() => false)
-    if (!fileExists) {
-      await mkdir(modsDir, { recursive: true }).catch(() => {})
-      const downloadRes = await fetch(downloadUrl)
-      if (!downloadRes.ok) throw new Error(`Fallo al descargar desde CurseForge (${downloadRes.status}).`)
-      const arrayBuffer = await downloadRes.arrayBuffer()
-      await writeFile(targetPath, Buffer.from(arrayBuffer))
-    }
-
-    const deps = file.dependencies || []
-    for (const dep of deps) {
-      if (dep.relationType === 3 && dep.modId) { 
-        try {
-          const depFilename = await installCurseForgeMod(dep.modId, installedDeps, visited)
-          if (depFilename && !installedDeps.includes(depFilename)) {
-            installedDeps.push(depFilename)
-          }
-        } catch (e) {
-          console.error('Error instalando dependencia de CurseForge:', e)
-        }
+    for (const dep of latest.dependencies ?? []) {
+      // relationType 3 = required dependency
+      if (dep.relationType !== 3 || !dep.modId || visited.has(String(dep.modId))) continue
+      try {
+        const child = await installCurseForgeMod(String(dep.modId), installed, failed, visited, official, false)
+        if (!installed.includes(child.filename)) installed.push(child.filename)
+      } catch (err) {
+        failed.push(String(dep.modId))
+        log.error('[Mods] Falló la dependencia de CurseForge %s: %s', dep.modId, err instanceof Error ? err.message : String(err))
       }
     }
-
-    return filename
+    return { filename: file.filename, versionId: latest.id === undefined ? undefined : String(latest.id), sha1: file.sha1 }
   }
 
-  ipc.handle('mods:install-curseforge', async (_event, modId: string | number) => {
-    const installedDeps: string[] = []
-    const visited = new Set<string>()
-    const filename = await installCurseForgeMod(modId, installedDeps, visited)
-    
-    const meta = await getCustomMetadata(instance)
-    meta[filename] = { dependencies: installedDeps }
-    await saveCustomMetadata(instance, meta)
-
-    return { ok: true, filename, dependencies: installedDeps }
-  })
+  ipc.handle('mods:install-curseforge', [z.union([z.number().int().positive(), z.string().regex(/^\d{1,10}$/)])], (_event, modId) =>
+    enqueue(async () => {
+      const id = String(modId)
+      const installed: string[] = []
+      const failed: string[] = []
+      const root = await installCurseForgeMod(id, installed, failed, new Set(), await officialMods(), true)
+      const meta = await getMeta()
+      meta[root.filename] = { dependencies: installed, projectId: id, platform: 'curseforge', versionId: root.versionId, sha1: root.sha1 }
+      await saveMeta(meta)
+      return { ok: true, filename: root.filename, dependencies: installed, failedDependencies: failed }
+    })
+  )
 }

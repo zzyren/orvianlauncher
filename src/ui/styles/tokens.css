@@ -1,0 +1,101 @@
+/*
+ * Orvian design tokens — "Observatorio".
+ * Calm, opaque ink surfaces; the warm gold of the emblem's rim is the only action colour.
+ * Dark only, on purpose: the launcher is a game client whose artwork is a night sky.
+ * Every colour, radius, spacing step, layer and duration used by the UI comes from here.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg: #0a0e13;
+  --surface-1: #111821;
+  --surface-2: #17202b;
+  --surface-3: #1e2935;
+  --bg-scrim: linear-gradient(90deg, rgba(10, 14, 19, 0.94) 0%, rgba(10, 14, 19, 0.78) 45%, rgba(10, 14, 19, 0.35) 100%);
+  --backdrop: rgba(5, 8, 12, 0.6);
+
+  /* Lines */
+  --border: rgba(170, 190, 215, 0.1);
+  --border-strong: rgba(170, 190, 215, 0.2);
+
+  /* Text (contrast measured against --bg / --surface-1) */
+  --text: #e7ecf2;
+  --text-muted: #a1acba;
+  --text-subtle: #8390a0;
+
+  /* Accent: the only action colour */
+  --accent: #e2b45e;
+  --accent-hover: #ecc57e;
+  --accent-press: #c99a45;
+  --on-accent: #17120a;
+  --accent-soft: rgba(226, 180, 94, 0.12);
+
+  /* Status */
+  --info: #7baaf7;
+  --success: #4fc08d;
+  --warning: #f0954a;
+  --danger: #ef6b6b;
+  --info-soft: rgba(123, 170, 247, 0.12);
+  --success-soft: rgba(79, 192, 141, 0.12);
+  --warning-soft: rgba(240, 149, 74, 0.12);
+  --danger-soft: rgba(239, 107, 107, 0.12);
+  --focus: #ecc57e;
+
+  /* Depth: two tinted layers, no glows */
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 1px 2px rgba(2, 6, 12, 0.5), 0 4px 12px rgba(2, 6, 12, 0.35);
+  --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px rgba(2, 6, 12, 0.55), 0 2px 6px rgba(2, 6, 12, 0.4);
+
+  /* Type */
+  --font-sans: 'Outfit Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 32px;
+  --text-display: 44px;
+
+  /* Spacing (4 px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Shape: child radius is never larger than its parent's */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  /* Layers */
+  --z-base: 0;
+  --z-raised: 10;
+  --z-titlebar: 100;
+  --z-dropdown: 200;
+  --z-toast: 300;
+  --z-modal: 400;
+  --z-tooltip: 500;
+
+  /* Motion */
+  --dur-instant: 80ms;
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* Layout */
+  --titlebar-h: 56px;
+  --statusbar-h: 36px;
+  --content-max: 1200px;
+}

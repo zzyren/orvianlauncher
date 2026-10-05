@@ -8,11 +8,25 @@ const packFile = z.object({
   required: z.boolean(), userMutable: z.boolean(), userDeletable: z.boolean()
 })
 
+const httpsUrl = z.string().url().refine((value) => new URL(value).protocol === 'https:', 'Solo HTTPS')
+
+/** The single archive the files come from, with enough data to verify it before opening it. */
+const archive = z.object({ url: httpsUrl, sha256, size: z.number().int().positive() })
+
+const server = z.object({
+  name: z.string().min(1).max(64),
+  address: z.string().min(1).max(253),
+  port: z.number().int().min(1).max(65535).optional()
+})
+
 export const ManifestSchema = z.object({
   schemaVersion: z.literal(1),
   pack: z.object({ id: z.literal('orvian'), name: z.literal('Orvian'), version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/), minecraft: z.literal('1.20.1'), loader: z.literal('forge'), forge: z.string().min(1) }),
   runtime: z.object({ java: z.literal(17) }),
-  minimumLauncher: z.string().regex(/^\d+\.\d+\.\d+/), publishedAt: z.string().datetime(), changelog: z.array(z.string()), files: z.array(packFile)
+  minimumLauncher: z.string().regex(/^\d+\.\d+\.\d+/), publishedAt: z.string().datetime(), changelog: z.array(z.string()), files: z.array(packFile),
+  /** Optional so manifests published by older launchers keep validating. */
+  archive: archive.optional(),
+  server: server.optional()
 }).superRefine((manifest, ctx) => {
   const paths = new Set<string>()
   for (const file of manifest.files) {
@@ -63,8 +77,4 @@ export function compareVersions(a: string, b: string): number {
   }
   if (a.includes('-') !== b.includes('-')) return a.includes('-') ? -1 : 1
   return 0
-}
-
-export function planSync(files: PackFile[], installed: Record<string, string>) {
-  return files.filter((file) => installed[file.path] !== file.sha256).map((file) => ({ ...file, action: installed[file.path] ? 'replace' as const : 'add' as const }))
 }
