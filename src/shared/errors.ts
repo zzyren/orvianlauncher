@@ -4,6 +4,7 @@ export type OrvianErrorCode =
   | 'NETWORK_OFFLINE'
   | 'DOWNLOAD_FAILED'
   | 'HASH_MISMATCH'
+  | 'DOWNLOAD_UNVERIFIABLE'
   | 'DISK_FULL'
   | 'PERMISSION'
   | 'JAVA_INSTALL_FAILED'
@@ -94,6 +95,11 @@ const CATALOG: Record<OrvianErrorCode, CatalogEntry> = {
     title: 'Archivo dañado',
     body: '{file|El archivo} no coincide con la versión oficial. Lo descargaremos de nuevo al reparar.',
     actions: ['repair', 'copy-diagnostics']
+  },
+  DOWNLOAD_UNVERIFIABLE: {
+    title: 'No se puede verificar {file|la descarga}',
+    body: 'El servicio no publica una firma para comprobar el archivo, así que por seguridad no se instalará.',
+    actions: ['dismiss']
   },
   DISK_FULL: {
     title: 'Espacio insuficiente',

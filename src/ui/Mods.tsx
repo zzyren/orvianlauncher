@@ -4,6 +4,7 @@ import {
   Flame, Layers, CheckCircle2, AlertCircle, FolderOpen, RotateCw, X 
 } from 'lucide-react'
 import CustomDialog from './CustomDialog'
+import { ipcErrorMessage } from './ipcError'
 
 type ModItem = { 
   filename: string
@@ -83,7 +84,7 @@ export default function ModsView() {
       }
     } catch (e: any) {
       console.error(e)
-      setErrorMessage(`Error al buscar en ${targetPlatform === 'modrinth' ? 'Modrinth' : 'CurseForge'}: ${e?.message || e}`)
+      setErrorMessage(`Error al buscar en ${targetPlatform === 'modrinth' ? 'Modrinth' : 'CurseForge'}: ${ipcErrorMessage(e)}`)
     }
     setSearching(false)
   }
@@ -110,22 +111,25 @@ export default function ModsView() {
     setInstalling(hit.project_id)
     setErrorMessage(null)
     try {
-      let res: { ok: boolean; filename: string; dependencies?: string[] }
+      let res: { ok: boolean; filename: string; dependencies?: string[]; failedDependencies?: string[] }
       if (hit.platform === 'modrinth') {
         res = await window.orvian.installModrinth(hit.project_id)
       } else {
         res = await window.orvian.installCurseForge(hit.project_id)
       }
 
-      let msg = `¡Mod "${res.filename}" instalado correctamente!`
+      let msg = `Mod "${res.filename}" instalado.`
       if (res.dependencies && res.dependencies.length > 0) {
-        msg = `¡Mod "${res.filename}" y sus dependencias (${res.dependencies.length}) instalados correctamente!`
+        msg = `Mod "${res.filename}" y sus dependencias (${res.dependencies.length}) instalados.`
+      }
+      if (res.failedDependencies && res.failedDependencies.length > 0) {
+        msg += ` No se pudieron instalar ${res.failedDependencies.length} dependencias; puede que el mod no arranque.`
       }
       setInstallSuccess(msg)
       setTimeout(() => setInstallSuccess(null), 5000)
       await loadMods()
     } catch (e: any) {
-      setErrorMessage(`Error al instalar mod: ${e?.message || e}`)
+      setErrorMessage(`Error al instalar mod: ${ipcErrorMessage(e)}`)
     }
     setInstalling(null)
   }
@@ -144,7 +148,7 @@ export default function ModsView() {
       setTimeout(() => setInstallSuccess(null), 4000)
       await loadMods()
     } catch (e: any) {
-      setErrorMessage(`Error al eliminar mod: ${e?.message || e}`)
+      setErrorMessage(`Error al eliminar mod: ${ipcErrorMessage(e)}`)
     }
   }
 
