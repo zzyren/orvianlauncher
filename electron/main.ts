@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { mkdir } from 'node:fs/promises'
+import { z } from 'zod'
 import { app, BrowserWindow, ipcMain, Menu, Tray } from 'electron'
 import { getConfig, initConfig } from './config'
 import { createIpc } from './ipc'
@@ -139,6 +140,12 @@ function start(): void {
     })
     ipc.handle('window:hide-tray', [], () => {
       if (trayWindow && !trayWindow.isDestroyed()) trayWindow.hide()
+    })
+    // The quick menu fits its content, so there is never an empty gap above the footer
+    ipc.handle('window:resize-tray', [z.number().int().min(160).max(640)], (_event, height) => {
+      if (!trayWindow || trayWindow.isDestroyed()) return
+      trayWindow.setContentSize(370, height)
+      if (tray && trayWindow.isVisible()) positionTrayWindow(trayWindow, tray)
     })
     ipc.handle('app:quit', [], () => {
       if (mainWindow) {

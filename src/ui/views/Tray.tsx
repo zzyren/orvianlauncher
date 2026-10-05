@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { ExternalLink, FolderOpen, HardDrive, Power, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ExternalLink, FolderOpen, HardDrive, Moon, Power, X } from 'lucide-react'
 import { getPrimaryAction } from '../../shared/launcher-state'
 import { Avatar } from '../components/Avatar'
 import { Button, IconButton } from '../components/Button'
@@ -16,9 +16,30 @@ export default function Tray() {
   const [quitPrompt, setQuitPrompt] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
+  const rootRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => window.orvian.onPromptMcQuit(() => setQuitPrompt(true)), [])
 
-  if (!state) return <div className="tray" aria-busy="true" />
+  // Keeps the window exactly as tall as the menu: no empty space whatever the state
+  const ready = state !== null
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    let last = 0
+    const fit = (): void => {
+      const height = root.offsetHeight
+      if (height !== last && height > 0) {
+        last = height
+        void window.orvian.resizeTray(Math.min(640, Math.max(160, height))).catch(() => undefined)
+      }
+    }
+    const observer = new ResizeObserver(fit)
+    observer.observe(root)
+    fit()
+    return () => observer.disconnect()
+  }, [ready])
+
+  if (!state) return <div className="tray" ref={rootRef} aria-busy="true" />
 
   const { phase } = state
   const primary = getPrimaryAction(state)
@@ -42,7 +63,7 @@ export default function Tray() {
   }
 
   return (
-    <div className="tray">
+    <div className="tray" ref={rootRef}>
       <header className="tray-header">
         <div className="tray-brand">
           <img src="./logo-64.png" alt="" width={24} height={24} draggable={false} />
@@ -68,6 +89,21 @@ export default function Tray() {
             <span className="tray-signin-sub">Se abrirá el launcher para conectar tu cuenta</span>
           </button>
         )}
+
+        <p className="tray-server" data-state={state.server.state}>
+          {state.server.state === 'sleeping' ? <Moon size={14} strokeWidth={2} className="server-moon" aria-hidden="true" /> : <span className="status-dot" aria-hidden="true" />}
+          <span>
+            {state.server.state === 'online'
+              ? `Servidor en línea${state.server.players ? ` · ${state.server.players.online}/${state.server.players.max} jugadores` : ''}`
+              : state.server.state === 'sleeping'
+                ? 'Servidor dormido · se despierta al jugar'
+                : state.server.state === 'starting'
+                  ? 'Servidor despertando…'
+                  : state.server.state === 'offline'
+                    ? 'Servidor sin conexión'
+                    : 'Comprobando el servidor…'}
+          </span>
+        </p>
 
         {error && <p className="tray-error" role="alert">{error}</p>}
 

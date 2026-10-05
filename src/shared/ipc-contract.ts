@@ -97,6 +97,7 @@ export interface OrvianApi {
   closeWindow(): Promise<void>
   showMainWindow(): Promise<void>
   hideTrayWindow(): Promise<void>
+  resizeTray(height: number): Promise<void>
   quitApp(): Promise<void>
   isMinecraftRunning(): Promise<boolean>
   forceQuit(): Promise<void>

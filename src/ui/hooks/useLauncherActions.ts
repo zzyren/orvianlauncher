@@ -14,11 +14,12 @@ export function useLauncherActions(): { perform: Perform; performErrorAction: (a
     async (action) => {
       try {
         switch (action) {
+          // Play joins the server straight away (Quick Play); the menu offers the plain launch.
           case 'play':
-            await window.orvian.play()
+            await window.orvian.play({ quickPlay: true })
             break
           case 'play-installed':
-            await window.orvian.play({ playInstalled: true })
+            await window.orvian.play({ quickPlay: true, playInstalled: true })
             break
           case 'repair':
             await window.orvian.repair()
@@ -57,7 +58,7 @@ export function useLauncherActions(): { perform: Perform; performErrorAction: (a
         switch (action.id) {
           case 'retry':
             await window.orvian.dismissError()
-            await window.orvian.play()
+            await window.orvian.play({ quickPlay: true })
             break
           case 'repair':
             await window.orvian.dismissError()
@@ -65,7 +66,7 @@ export function useLauncherActions(): { perform: Perform; performErrorAction: (a
             break
           case 'play-offline':
             await window.orvian.dismissError()
-            await window.orvian.play({ playInstalled: true })
+            await window.orvian.play({ quickPlay: true, playInstalled: true })
             break
           case 'copy-diagnostics': {
             await window.orvian.copyDiagnostics()

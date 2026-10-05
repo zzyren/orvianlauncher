@@ -82,10 +82,13 @@ export function interpretStatus(address: string, raw: unknown, latencyMs: number
   const versionName = typeof status.version?.name === 'string' ? status.version.name : undefined
   const protocol = typeof status.version?.protocol === 'number' ? status.version.protocol : undefined
   const motd = flattenChat(status.description)
-  // Hosting proxies (e.g. exaroton) answer for a stopped server with a fake status that flags itself
-  // as offline through a negative protocol or an "Offline" version label.
-  const hostedAsOffline = (protocol !== undefined && protocol < 0) || (versionName !== undefined && /offline/i.test(versionName))
-  if (hostedAsOffline) return { address, state: 'offline', motd: motd || undefined, checkedAt }
+  // Hosting proxies (e.g. exaroton) answer for a server that is not running with a fake status that flags
+  // itself through a negative protocol or a "● Offline" / "● Starting" style version label.
+  const placeholder = (protocol !== undefined && protocol < 0) || (versionName !== undefined && /offline|●/i.test(versionName))
+  if (placeholder) {
+    const waking = versionName !== undefined && /start|load|prepar|restart|stopp|sav|wak/i.test(versionName)
+    return { address, state: waking ? 'starting' : 'sleeping', motd: motd || undefined, checkedAt }
+  }
   const online = Number(status.players?.online)
   const max = Number(status.players?.max)
   return {
@@ -156,6 +159,7 @@ export interface MonitorDeps {
 export class ServerMonitor {
   private timer: NodeJS.Timeout | null = null
   private hasAnswer = false
+  private fastTimer: NodeJS.Timeout | null = null
 
   constructor(private readonly deps: MonitorDeps) {}
 
@@ -170,9 +174,13 @@ export class ServerMonitor {
   stop(): void {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    if (this.fastTimer) clearTimeout(this.fastTimer)
+    this.fastTimer = null
   }
 
   async refresh(): Promise<void> {
+    if (this.fastTimer) clearTimeout(this.fastTimer)
+    this.fastTimer = null
     const target = this.deps.getTarget()
     const address = target.port === 25565 ? target.host : `${target.host}:${target.port}`
     // Show "checking" only until the first answer, so a routine refresh does not flicker the card.
@@ -180,5 +188,10 @@ export class ServerMonitor {
     const status = await (this.deps.ping ?? pingServer)({ host: target.host, port: target.port })
     this.hasAnswer = true
     this.deps.onStatus(status)
+    // A waking server is polled quickly, so the card flips to "online" as soon as it is ready.
+    if (status.state === 'starting' && this.deps.isActive()) {
+      this.fastTimer = setTimeout(() => void this.refresh(), 10_000)
+      this.fastTimer.unref?.()
+    }
   }
 }

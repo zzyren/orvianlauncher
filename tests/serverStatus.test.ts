@@ -73,8 +73,11 @@ describe('interpretStatus', () => {
   it('reads an online server', () => {
     expect(interpretStatus('mc.test', raw, 42, 1000)).toEqual({ address: 'mc.test', state: 'online', players: { online: 7, max: 20 }, latencyMs: 42, motd: 'Bienvenido', version: 'Forge 1.20.1', checkedAt: 1000 })
   })
-  it.each([[{ name: '● Offline', protocol: -1 }], [{ name: 'Offline', protocol: 763 }], [{ name: 'x', protocol: -1 }]])('treats a hosting proxy placeholder %j as offline', (version) => {
-    expect(interpretStatus('mc.test', { ...raw, version }, 1, 1).state).toBe('offline')
+  it.each([[{ name: '● Offline', protocol: -1 }], [{ name: 'Offline', protocol: 763 }], [{ name: 'x', protocol: -1 }]])('treats a hosting proxy placeholder %j as a sleeping server', (version) => {
+    expect(interpretStatus('mc.test', { ...raw, version }, 1, 1).state).toBe('sleeping')
+  })
+  it.each([['● Starting'], ['● Loading'], ['● Preparing'], ['● Restarting']])('treats the proxy label %s as a server that is waking up', (name) => {
+    expect(interpretStatus('mc.test', { ...raw, version: { name, protocol: -1 } }, 1, 1).state).toBe('starting')
   })
   it('tolerates missing fields', () => {
     expect(interpretStatus('mc.test', {}, 5, 9)).toMatchObject({ state: 'online', players: undefined, motd: undefined })
@@ -125,9 +128,9 @@ describe('pingServer against a real socket', () => {
     expect(await pingServer({ host: '127.0.0.1', port })).toMatchObject({ state: 'online', motd: 'chunked' })
   })
 
-  it('reports a hosting proxy placeholder as offline', async () => {
+  it('reports a hosting proxy placeholder as a sleeping server', async () => {
     const port = await listen((socket) => socket.write(response({ version: { name: '● Offline', protocol: -1 }, players: { online: 0, max: 0 }, description: 'Server offline' })))
-    expect((await pingServer({ host: '127.0.0.1', port })).state).toBe('offline')
+    expect((await pingServer({ host: '127.0.0.1', port })).state).toBe('sleeping')
   })
 
   it('treats a refused connection as offline, quickly', async () => {

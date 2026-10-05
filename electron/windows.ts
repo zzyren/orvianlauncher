@@ -123,7 +123,8 @@ export function createMainWindow(options: { shouldHideOnClose: () => boolean }):
 export function createTrayWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 370,
-    height: 490,
+    height: 380,
+    useContentSize: true,
     show: false,
     frame: false,
     fullscreenable: false,
