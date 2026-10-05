@@ -33,7 +33,6 @@ export default tseslint.config(
       'electron/services.ts',
       'electron/minecraft.ts',
       'electron/publisher.ts',
-      'electron/auth.ts',
       'electron/updater.ts',
       'electron/preload.ts',
       'scripts/patch-electron-dev.cjs',

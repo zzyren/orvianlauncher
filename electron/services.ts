@@ -336,8 +336,10 @@ export function registerLauncherIpc(ipc: Ipc, dataRoot: string) {
     isBusy = true
     
     try {
-      const account = await authService.loadAccount()
-      if (!account) throw new Error('Inicia sesión en tu cuenta de Microsoft antes de jugar.')
+      if (!(await authService.loadAccount())) throw new Error('Inicia sesión en tu cuenta de Microsoft antes de jugar.')
+      // Renews the Minecraft token silently when it is about to expire; offline it falls back to the stored one.
+      const { account, stale } = await authService.getValidSession()
+      if (stale) log.warn('[Launcher] Se usará la sesión guardada sin renovar: el multijugador puede fallar.')
 
       // Detectar estado local primero por si estamos offline
       const statePath = join(instance, '.orvian', 'official-state.json')
@@ -442,7 +444,9 @@ export function registerLauncherIpc(ipc: Ipc, dataRoot: string) {
           name: account.name
         },
         accessToken: account.accessToken,
-        userType: 'mojang'
+        // userType is left unset on purpose: @xmcl/core then sends `msa`, which is what Microsoft accounts use.
+        launcherName: 'Orvian',
+        launcherBrand: app.getVersion()
       })
 
       activeMinecraftProcess = proc
@@ -496,8 +500,13 @@ export function registerLauncherIpc(ipc: Ipc, dataRoot: string) {
     }
   })
 
+  ipc.handle('account:cancel-login', [], () => {
+    authService.cancelLogin()
+    return { ok: true }
+  })
+
   ipc.handle('account:logout', [], async () => {
-    await authService.saveAccount(null)
+    await authService.logout()
     return { ok: true }
   })
 

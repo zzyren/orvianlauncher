@@ -29,6 +29,8 @@ declare global {
       repair(): Promise<{ ok: boolean; message: string }>
       play(): Promise<{ ok: boolean; message: string }>
       login(): Promise<{ ok: boolean; message: string }>
+      /** Closes the Microsoft sign-in window if one is open. */
+      cancelLogin(): Promise<{ ok: boolean }>
       logout(): Promise<{ ok: boolean }>
       setRam(gb: number): Promise<{ ok: boolean }>
       openFolder(kind: 'mods' | 'shaders' | 'resourcepacks' | 'logs'): Promise<{ ok: boolean; error: string }>

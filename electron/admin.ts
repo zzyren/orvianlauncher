@@ -9,16 +9,12 @@ import { getConfig, isAdminUuid } from './config'
 import type { Ipc } from './ipc'
 import { log } from './logger'
 import { fetchJson } from './net'
+import type { SecretBox } from './secretBox'
 import { buildManifestFromPrismZip, publishReleaseToGitHub } from './publisher'
 
-/** Subset of Electron's safeStorage, injectable so the store can be tested without Electron. */
-export interface SecretBox {
-  isEncryptionAvailable(): boolean
-  encryptString(plain: string): Buffer
-  decryptString(encrypted: Buffer): string
-}
-
 const TOKEN_PATTERN = /^(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})$/
+
+export type { SecretBox }
 
 export function isPlausibleGithubToken(value: string): boolean {
   return TOKEN_PATTERN.test(value)
