@@ -1,6 +1,8 @@
 /** Turns per-step progress into one overall fraction with real counts and transfer speed. */
 
-export type InstallStep = 'java' | 'minecraft' | 'forge' | 'libraries' | 'modpack' | 'finalizing'
+import type { InstallStep } from '../../src/shared/launcher-state'
+
+export type { InstallStep }
 
 /** Share of the overall bar each step covers. Heavy downloads get the widest slices. */
 const STEP_RANGE: Record<InstallStep, readonly [number, number]> = {

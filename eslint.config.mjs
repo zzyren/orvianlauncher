@@ -30,7 +30,6 @@ export default tseslint.config(
   // once the last one is gone.
   {
     files: [
-      'electron/services.ts',
       'electron/updater.ts',
       'electron/preload.ts',
       'scripts/patch-electron-dev.cjs',

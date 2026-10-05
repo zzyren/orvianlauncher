@@ -1,7 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { LauncherState } from '../src/shared/launcher-state'
 import type { UpdaterEvent } from './updater'
 
 const api = {
+  getState: (): Promise<LauncherState> => ipcRenderer.invoke('launcher:get-state'),
+  /** The one channel the main process uses to describe the launcher; replaces polling. */
+  onState: (callback: (state: LauncherState) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: LauncherState) => callback(data)
+    ipcRenderer.on('launcher:state', listener)
+    return () => ipcRenderer.removeListener('launcher:state', listener)
+  },
+  dismissError: () => ipcRenderer.invoke('launcher:dismiss-error'),
+  refreshServer: () => ipcRenderer.invoke('server:refresh'),
+  copyDiagnostics: () => ipcRenderer.invoke('diagnostics:copy'),
   getStatus: (opts?: { fresh?: boolean }) => ipcRenderer.invoke('launcher:status', opts),
   checkForUpdates: () => ipcRenderer.invoke('pack:check'),
   repair: () => ipcRenderer.invoke('pack:repair'),
@@ -38,11 +49,6 @@ const api = {
     const listener = () => callback()
     ipcRenderer.on('dialog:prompt-mc-quit', listener)
     return () => ipcRenderer.removeListener('dialog:prompt-mc-quit', listener)
-  },
-  onStatusUpdate: (callback: (status: any) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, data: any) => callback(data)
-    ipcRenderer.on('launcher:status-update', listener)
-    return () => ipcRenderer.removeListener('launcher:status-update', listener)
   },
   /** 
    * Escucha actualizaciones de estado del modpack enviadas proactivamente por el main process.
