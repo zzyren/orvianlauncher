@@ -1,6 +1,7 @@
 import { autoUpdater } from 'electron-updater'
 import type { BrowserWindow } from 'electron'
 import { app } from 'electron'
+import type { UpdaterState } from '../src/shared/launcher-state'
 import { getConfig } from './config'
 import type { Ipc } from './ipc'
 import { log } from './logger'
@@ -20,6 +21,31 @@ export type UpdaterEvent =
 export const IPC_UPDATER_EVENT = 'updater:event'
 
 // ─── Estado interno ───────────────────────────────────────────────────────────
+
+export interface UpdaterHooks {
+  /** Receives every change of the launcher-update state (the main process store shows it). */
+  onState: (state: UpdaterState) => void
+  isGameRunning: () => boolean
+}
+
+let hooks: UpdaterHooks | null = null
+let current: UpdaterState = { status: 'idle', currentVersion: '' }
+
+/** Connects the updater to the rest of the launcher; call once before the first update check. */
+export function bindUpdater(value: UpdaterHooks): void {
+  hooks = value
+  current = { ...current, currentVersion: app.getVersion() }
+  value.onState(current)
+}
+
+export function getUpdaterState(): UpdaterState {
+  return current
+}
+
+function setState(next: Omit<UpdaterState, 'currentVersion'>): void {
+  current = { ...next, currentVersion: app.getVersion() }
+  hooks?.onState(current)
+}
 
 let activeWindow: BrowserWindow | null = null
 /** Versión que ya fue descargada. Evita bucles de re-descarga. */
@@ -50,6 +76,8 @@ export function configureAutoUpdater() {
   autoUpdater.on('checking-for-update', () => {
     log.info('[Updater] Comprobando actualizaciones del launcher...')
     send({ type: 'checking' })
+    // A background check must not flicker the UI of a state that is already past it
+    if (current.status === 'idle' || current.status === 'error') setState({ status: 'checking' })
   })
 
   autoUpdater.on('update-available', (info) => {
@@ -59,6 +87,7 @@ export function configureAutoUpdater() {
       log.info('[Updater] Esta version ya fue descargada. Ignorando evento duplicado.')
       return
     }
+    setState({ status: 'available', newVersion: info.version })
     const releaseNotes = typeof info.releaseNotes === 'string'
       ? info.releaseNotes
       : Array.isArray(info.releaseNotes)
@@ -78,10 +107,12 @@ export function configureAutoUpdater() {
   autoUpdater.on('update-not-available', (_info) => {
     log.info('[Updater] El launcher ya esta en la ultima version.')
     send({ type: 'not-available', currentVersion: app.getVersion() })
+    if (current.status === 'checking') setState({ status: 'idle' })
     isChecking = false
   })
 
   autoUpdater.on('download-progress', (progress) => {
+    setState({ status: 'downloading', newVersion: current.newVersion, percent: Math.round(progress.percent), bytesPerSecond: Math.round(progress.bytesPerSecond) })
     send({
       type: 'downloading',
       percent: Math.round(progress.percent),
@@ -95,6 +126,9 @@ export function configureAutoUpdater() {
     log.info(`[Updater] Actualizacion del launcher descargada: v${info.version}`)
     downloadedVersion = info.version
     isChecking = false
+    // Once downloaded, install when the launcher is closed normally, even if the player never presses restart
+    autoUpdater.autoInstallOnAppQuit = true
+    setState({ status: 'downloaded', newVersion: info.version })
     send({ type: 'downloaded', newVersion: info.version })
   })
 
@@ -102,6 +136,7 @@ export function configureAutoUpdater() {
     const msg = err?.message ?? String(err)
     log.warn('[Updater] Error (no critico):', msg)
     isChecking = false
+    if (current.status !== 'downloaded') setState({ status: 'error', newVersion: current.newVersion, message: msg })
     // Solo enviar si no es un error de entorno de desarrollo o de configuración missing
     const ignoredMessages = [
       'net::ERR_',
@@ -159,6 +194,10 @@ export function registerUpdaterIpc(ipc: Ipc, getMainWindow: () => BrowserWindow 
 
   // Instalar y reiniciar
   ipc.handle('updater:install', [], () => {
+    // quitAndInstall quits the launcher, which would kill a running game without warning
+    if (hooks?.isGameRunning()) {
+      throw new Error('Minecraft está abierto. La actualización se instalará cuando cierres el launcher.')
+    }
     try {
       // isSilent=false para mostrar el instalador NSIS visualmente,
       // isForceRunAfter=true para que el launcher se abra después de instalar

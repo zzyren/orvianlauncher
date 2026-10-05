@@ -1,83 +1,56 @@
 import { useState, useEffect } from 'react'
 import { Play, X, ExternalLink, FolderOpen, Power, ChevronRight, LogIn, HardDrive, Loader2, Link2, Gamepad2, Shield } from 'lucide-react'
 import CustomDialog from './CustomDialog'
+import { getPrimaryAction } from '../shared/launcher-state'
+import { useLauncherState } from './hooks/useLauncherState'
 import './tray.css'
 
 export default function TrayMenu() {
-  const [status, setStatus] = useState<any>(null)
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const state = useLauncherState()
+  const [actionError, setActionError] = useState<string | null>(null)
   const [mcPromptOpen, setMcPromptOpen] = useState(false)
 
-  const refreshStatus = async () => {
-    try {
-      const s = await window.orvian.getStatus()
-      setStatus(s)
-    } catch (e) {
-      console.error('Failed to get status', e)
-    }
-  }
-
   useEffect(() => {
-    void refreshStatus()
-    const interval = setInterval(refreshStatus, 2000)
-
-    const unbindStatus = window.orvian.onStatusUpdate?.((s: any) => {
-      setStatus(s)
-    })
-
-    const unbindProgress = window.orvian.onProgress?.((event: any) => {
-      if (event.state !== 'playing' && event.state !== 'done' && event.state !== 'error' && event.state !== 'idle') {
-        setMessage(event.detail)
-        setBusy(true)
-      } else {
-        setBusy(false)
-      }
-      if (event.state === 'playing' || event.state === 'error' || event.state === 'done') {
-        void refreshStatus()
-      }
-    })
-
-    const unbindMcPrompt = window.orvian.onPromptMcQuit?.(() => {
-      setMcPromptOpen(true)
-    })
-
-    return () => {
-      clearInterval(interval)
-      unbindStatus?.()
-      unbindProgress?.()
-      unbindMcPrompt?.()
-    }
+    const unbind = window.orvian.onPromptMcQuit?.(() => setMcPromptOpen(true))
+    return () => unbind?.()
   }, [])
 
-  const run = async (action: () => Promise<any>, startMsg: string) => {
-    if (busy) return
-    setBusy(true)
-    setError(null)
-    setMessage(startMsg)
+  const primary = state ? getPrimaryAction(state) : null
+  const phase = state?.phase
+  const busy = phase?.kind === 'installing' || phase?.kind === 'repairing' || phase?.kind === 'launching'
+  const isPlaying = phase?.kind === 'running'
+  const isAuthenticated = state?.account != null
+  const errorText = actionError ?? (phase?.kind === 'error' ? phase.error.title : null)
+
+  /** Runs the main button's action; failures that the store does not already show are shown here. */
+  const handlePrimary = async () => {
+    if (!primary?.enabled) return
+    setActionError(null)
     try {
-      await action()
-      setMessage('')
+      switch (primary.action) {
+        case 'login':
+        case 'update-launcher':
+          await window.orvian.showMainWindow()
+          break
+        case 'play':
+          await window.orvian.play()
+          break
+        case 'play-installed':
+          await window.orvian.play({ playInstalled: true })
+          break
+        case 'repair':
+          await window.orvian.repair()
+          break
+        case 'check':
+          await window.orvian.checkForUpdates()
+          break
+        default:
+          break
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-      await refreshStatus()
+      setActionError(e instanceof Error ? e.message : String(e))
     }
   }
-
-  const handlePlay = () => {
-    if (!status?.authenticated) {
-      window.orvian.showMainWindow()
-      return
-    }
-    void run(() => window.orvian.play(), 'Preparando Java 17...')
-  }
-
-  const isPlaying = Boolean(status?.isPlaying)
-  const isAuthenticated = Boolean(status?.authenticated)
-  const isReady = Boolean(status?.ready)
 
   return (
     <div className="tray-menu-container">
@@ -106,7 +79,7 @@ export default function TrayMenu() {
           <div className="tray-player-card">
             <div className="tray-avatar-wrapper">
               <img 
-                src={`https://minotar.net/helm/${status?.playerUuid ?? 'Steve'}/64.png`} 
+                src={`https://minotar.net/helm/${state?.account?.uuid ?? 'Steve'}/64.png`} 
                 alt="Skin" 
                 className="tray-skin" 
               />
@@ -114,20 +87,20 @@ export default function TrayMenu() {
             </div>
             <div className="tray-player-info">
               <div className="tray-player-name-row">
-                <span className="tray-player-name">{status?.playerName ?? 'Jugador'}</span>
-                {status?.isAdmin && (
+                <span className="tray-player-name">{state?.account?.name ?? 'Jugador'}</span>
+                {state?.isAdmin && (
                   <span className="tray-admin-badge">
                     <Shield size={10} /> ADMIN
                   </span>
                 )}
               </div>
               <span className="tray-player-status">
-                {isPlaying ? '🎮 Jugando a Minecraft' : (status?.hasUpdate ? `⚠ Actualización v${status.packVersion}` : '● Listo para jugar')}
+                {isPlaying ? 'Jugando a Minecraft' : (state?.pack.hasUpdate ? `Actualización v${state.pack.latest}` : (primary?.enabled ? 'Listo para jugar' : (primary?.label ?? '')))}
               </span>
             </div>
-            {status?.packVersion && (
+            {state?.pack.installed && (
               <div className="tray-pack-pill" title="Versión del modpack">
-                <span>v{status.packVersion}</span>
+                <span>v{state.pack.installed}</span>
               </div>
             )}
           </div>
@@ -148,21 +121,21 @@ export default function TrayMenu() {
         )}
 
         {/* ERROR SI OCURRIÓ */}
-        {error && (
+        {errorText && (
           <div className="tray-error-banner">
-            <span>⚠ {error}</span>
+            <span>{errorText}</span>
           </div>
         )}
 
         {/* BOTÓN HERO 3D DE JUGAR CON PROGRESO INTEGRADO (CONCORDANCIA TOTAL) */}
         <button 
-          className={`tray-launch-btn ${(!isReady && isAuthenticated) || busy || isPlaying ? 'disabled' : ''} ${busy ? 'busy' : ''} ${error ? 'has-error' : ''}`}
-          onClick={handlePlay}
-          disabled={busy || isPlaying}
+          className={`tray-launch-btn ${!primary?.enabled ? 'disabled' : ''} ${busy ? 'busy' : ''} ${errorText ? 'has-error' : ''}`}
+          onClick={() => void handlePrimary()}
+          disabled={!primary?.enabled}
         >
-          {busy && (
+          {(phase?.kind === 'installing' || phase?.kind === 'repairing') && (
             <div className="tray-launch-progress-track">
-              <div className="tray-launch-progress-fill" />
+              <div className="tray-launch-progress-fill" style={{ transform: `scaleX(${phase.progress.fraction})`, animation: 'none', width: '100%', transformOrigin: 'left' }} />
             </div>
           )}
           <div className="tray-launch-main">
@@ -173,27 +146,11 @@ export default function TrayMenu() {
             ) : (
               <Play size={20} className="play-icon" />
             )}
-            <span className="tray-launch-title">
-              {busy ? 'PREPARANDO...' : (isPlaying ? 'JUGANDO...' : (error ? 'REINTENTAR' : (status?.hasUpdate ? 'ACTUALIZAR' : 'JUGAR')))}
-            </span>
+            <span className="tray-launch-title">{primary?.label ?? 'Comprobando…'}</span>
           </div>
           <div className="tray-launch-subtitle">
-            {busy ? (
-              <span>{message || 'Preparando...'}</span>
-            ) : isPlaying ? (
-              <span>MINECRAFT EN EJECUCIÓN</span>
-            ) : status?.hasUpdate ? (
-              <span>NUEVA VERSIÓN v{status.packVersion}</span>
-            ) : isReady ? (
-              <>
-                <Link2 size={11} />
-                <span>LISTO PARA JUGAR</span>
-              </>
-            ) : !isAuthenticated ? (
-              <span>INICIA SESIÓN PARA JUGAR</span>
-            ) : (
-              <span>CONFIGURANDO</span>
-            )}
+            {primary?.enabled && primary.action === 'play' && !state?.pack.hasUpdate && <Link2 size={11} />}
+            <span>{primary?.sublabel}</span>
           </div>
         </button>
 

@@ -1,8 +1,17 @@
+import type { LauncherState } from './launcher-state'
 import type { LauncherProgress, UpdaterEvent, PackStatus } from '../../electron/preload'
 
 declare global {
   interface Window {
     orvian: {
+      /** Whole launcher state; hydrates a window when it opens. */
+      getState(): Promise<LauncherState>
+      /** Every change of the launcher state (throttled by the main process). */
+      onState(callback: (state: LauncherState) => void): () => void
+      dismissError(): Promise<void>
+      refreshServer(): Promise<void>
+      /** Copies a redacted support report to the clipboard. */
+      copyDiagnostics(): Promise<{ ok: boolean; lines: number }>
       /** Obtiene el estado actual del launcher. Pasar fresh:true para forzar un fetch de red del manifest. */
       getStatus(opts?: { fresh?: boolean }): Promise<{
         appVersion: string
@@ -65,7 +74,6 @@ declare global {
       forceQuit(): Promise<void>
       appReady?(): Promise<void>
       onPromptMcQuit?(callback: () => void): () => void
-      onStatusUpdate?(callback: (status: any) => void): () => void
       /** 
        * Suscribirse a notificaciones proactivas de estado del modpack.
        * El main process emite este evento cuando detecta un cambio de versión

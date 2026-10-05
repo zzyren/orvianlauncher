@@ -6,7 +6,7 @@ import { createIpc } from './ipc'
 import { initLogger, log } from './logger'
 import { registerModsIpc } from './modManager'
 import { setUserAgent } from './net'
-import { isMinecraftRunning, killMinecraftProcess, registerLauncherIpc } from './services'
+import { isMinecraftRunning, killMinecraftProcess, registerLauncher } from './launcher'
 import { configureAutoUpdater, registerUpdaterIpc, scheduleUpdateCheck, setUpdaterWindow } from './updater'
 import {
   createMainWindow,
@@ -107,7 +107,9 @@ function start(): void {
     await mkdir(join(dataRoot, 'instances', 'orvian'), { recursive: true })
 
     const ipc = createIpc(ipcMain, { isTrustedUrl: isTrustedAppUrl })
-    registerLauncherIpc(ipc, dataRoot)
+    const launcher = registerLauncher(ipc, dataRoot, {
+      isUiVisible: () => [mainWindow, trayWindow].some((win) => win !== null && !win.isDestroyed() && win.isVisible() && !win.isMinimized())
+    })
     registerModsIpc(ipc, dataRoot)
     registerUpdaterIpc(ipc, () => mainWindow)
 
@@ -146,6 +148,9 @@ function start(): void {
       app.quit()
     })
 
+    // Account and settings are loaded before the window is shown
+    const launcherReady = launcher.init().catch((err: unknown) => log.error('Fallo al iniciar el launcher: %s', String(err)))
+
     // The renderer reports once mounted; keep the splash up for at least minSplashMs
     let splashClosed = false
     const finishLoading = (): void => {
@@ -162,7 +167,8 @@ function start(): void {
         splash = null
       }
     }
-    ipc.handle('app:ready', [], () => {
+    ipc.handle('app:ready', [], async () => {
+      await launcherReady
       const delay = Math.max(0, getConfig().minSplashMs - (Date.now() - splashStartTime))
       setTimeout(finishLoading, delay)
     })
