@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react'
 import { Download, FolderOpen, Package, RotateCw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
 import type { InstalledMod, ModPlatform, ModSearchHit } from '../../shared/ipc-contract'
 import { formatBytes } from '../../shared/format'
@@ -180,8 +180,8 @@ function InstalledList({ mods, loadError, onDelete, onExplore }: { mods: Install
         </div>
       ) : (
         <ul className="mod-list">
-          {shown.map((mod) => (
-            <li key={mod.filename} className="mod-row">
+          {shown.map((mod, index) => (
+            <li key={mod.filename} className="mod-row" style={{ '--n': index } as CSSProperties}>
               <span className={cx('mod-icon', mod.isOfficial && 'mod-icon-official')} aria-hidden="true">
                 {mod.isOfficial ? <ShieldCheck size={18} strokeWidth={1.75} /> : <Package size={18} strokeWidth={1.75} />}
               </span>
@@ -293,12 +293,12 @@ function Explore({ installedKeys, installing, onInstall }: { installedKeys: Set<
       )}
 
       <ul className="hit-list">
-        {hits.map((hit) => {
+        {hits.map((hit, index) => {
           const key = `${hit.platform}:${hit.project_id}`
           const installed = installedKeys.has(key)
           const busy = installing.has(key)
           return (
-            <li key={key} className="hit-row">
+            <li key={key} className="hit-row" style={{ '--n': index } as CSSProperties}>
               <ModIcon src={hit.icon_url} title={hit.title} />
               <div className="hit-info">
                 <h2 className="hit-title" translate="no">{hit.title}</h2>

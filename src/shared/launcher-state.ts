@@ -86,7 +86,8 @@ export function derivePhase(f: PhaseFacts): LauncherPhase {
 
 export interface ServerStatus {
   address: string
-  state: 'unknown' | 'checking' | 'online' | 'offline'
+  /** `sleeping`/`starting`: the host (exaroton) is up but the Minecraft server is stopped or booting; joining wakes it. */
+  state: 'unknown' | 'checking' | 'online' | 'offline' | 'sleeping' | 'starting'
   players?: { online: number; max: number }
   latencyMs?: number
   /** Plain text: formatting codes are removed. */

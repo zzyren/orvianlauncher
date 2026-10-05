@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen, MoreHorizontal, Wrench, Server } from 'lucide-react'
+import { FolderOpen, MoreHorizontal, Play, Wrench } from 'lucide-react'
 import { getPrimaryAction, type LauncherState, type PrimaryActionId } from '../../shared/launcher-state'
 import { formatDuration } from '../../shared/format'
 import { useDelayedFlag } from '../hooks/useDelayedFlag'
@@ -10,13 +10,13 @@ import { ProgressBar } from './ProgressBar'
 interface PlayActionProps {
   state: LauncherState
   onAction: (action: PrimaryActionId) => void
-  onPlayOnServer: () => void
+  onPlayWithoutServer: () => void
   onRepair: () => void
   onKill: () => void
 }
 
 /** The one big button. Its text and behaviour come from `getPrimaryAction`, shared with the tray. */
-export function PlayAction({ state, onAction, onPlayOnServer, onRepair, onKill }: PlayActionProps) {
+export function PlayAction({ state, onAction, onPlayWithoutServer, onRepair, onKill }: PlayActionProps) {
   const { phase } = state
   const primary = getPrimaryAction(state)
   const working = phase.kind === 'installing' || phase.kind === 'repairing'
@@ -35,7 +35,10 @@ export function PlayAction({ state, onAction, onPlayOnServer, onRepair, onKill }
           aria-busy={working || phase.kind === 'launching' || undefined}
           onClick={() => onAction(primary.action)}
         >
-          <span className="play-label">{primary.label}</span>
+          <span key={primary.label} className="play-label">
+            {canPlay && <Play size={22} strokeWidth={2.25} fill="currentColor" aria-hidden="true" className="play-icon" />}
+            {primary.label}
+          </span>
           <span className="play-sub">{elapsed !== null ? `En juego · ${formatDuration(elapsed)}` : primary.sublabel}</span>
           {(working || indeterminate) && (
             <ProgressBar className="play-progress" label={working ? 'Progreso de la instalación' : 'Abriendo Minecraft'} value={phase.kind === 'installing' || phase.kind === 'repairing' ? phase.progress.fraction : undefined} />
@@ -46,7 +49,7 @@ export function PlayAction({ state, onAction, onPlayOnServer, onRepair, onKill }
           className="play-menu"
           trigger={<MoreHorizontal size={20} strokeWidth={1.75} aria-hidden="true" />}
           items={[
-            { label: 'Jugar en el servidor', icon: <Server size={16} strokeWidth={1.75} aria-hidden="true" />, disabled: !canPlay, onSelect: onPlayOnServer },
+            { label: 'Jugar sin entrar al servidor', icon: <Play size={16} strokeWidth={1.75} aria-hidden="true" />, disabled: !canPlay, onSelect: onPlayWithoutServer },
             { label: 'Reparar ahora', icon: <Wrench size={16} strokeWidth={1.75} aria-hidden="true" />, disabled: !idle || state.account === null, onSelect: onRepair },
             { label: 'Abrir la carpeta de mods', icon: <FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />, onSelect: () => void window.orvian.openFolder('mods') }
           ]}

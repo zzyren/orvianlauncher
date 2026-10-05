@@ -60,6 +60,7 @@ const api = {
   closeWindow: () => ipcRenderer.invoke('window:close'),
   showMainWindow: () => ipcRenderer.invoke('window:show-main'),
   hideTrayWindow: () => ipcRenderer.invoke('window:hide-tray'),
+  resizeTray: (height: number) => ipcRenderer.invoke('window:resize-tray', height),
   quitApp: () => ipcRenderer.invoke('app:quit'),
   isMinecraftRunning: () => ipcRenderer.invoke('app:is-mc-running'),
   forceQuit: () => ipcRenderer.invoke('app:force-quit'),

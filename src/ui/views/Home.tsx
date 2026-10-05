@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { ConfirmDialog, Dialog } from '../components/Dialog'
 import { Button } from '../components/Button'
 import { ErrorPanel } from '../components/ErrorPanel'
 import { InstallSteps } from '../components/InstallSteps'
 import { NewsList } from '../components/NewsList'
+import { Avatar } from '../components/Avatar'
+import { Badge } from '../components/Badge'
 import { PlayAction } from '../components/PlayAction'
 import { ServerCard } from '../components/ServerCard'
 import { useToast } from '../components/Toast'
@@ -29,27 +31,43 @@ export default function Home({ state }: { state: LauncherState }) {
   const working = phase.kind === 'installing' || phase.kind === 'repairing'
   const announcement = useStepAnnouncement(phase.kind === 'installing' || phase.kind === 'repairing' ? phase.progress.step : null)
 
-  const playOnServer = (): void => {
-    window.orvian.play({ quickPlay: true, playInstalled: state.pack.offline }).catch(() => toast({ kind: 'error', message: 'No se pudo iniciar el juego.' }))
+  const canJoinHint = phase.kind === 'ready' || phase.kind === 'update-available' || phase.kind === 'offline-ready' || phase.kind === 'crashed'
+  const playWithoutServer = (): void => {
+    window.orvian.play({ playInstalled: state.pack.offline }).catch(() => toast({ kind: 'error', message: 'No se pudo iniciar el juego.' }))
   }
-  const canQuickPlay = phase.kind === 'ready' || phase.kind === 'update-available' || phase.kind === 'offline-ready' || phase.kind === 'crashed'
 
   return (
     <div className="home view-enter">
       <div className="home-scrim" aria-hidden="true" />
       <div className="home-grid">
-        <section className="home-main" aria-labelledby="home-title">
-          <p className="home-eyebrow" translate="no">Minecraft 1.20.1 · Forge</p>
-          <h1 id="home-title" className="home-title" translate="no">Orvian</h1>
-          <p className="home-pack">{packLine(state)}</p>
+        <section className="home-main stagger" aria-labelledby="home-title">
+          <div className="home-brand" style={{ '--i': 0 } as CSSProperties}>
+            <img className="home-emblem" src="./logo-64.png" alt="" width={56} height={56} draggable={false} />
+            <div className="home-chips" translate="no">
+              <Badge tone="accent">Minecraft 1.20.1</Badge>
+              <Badge>Forge</Badge>
+              {pack.installed && <Badge tone="info">Pack v{pack.installed}</Badge>}
+            </div>
+          </div>
+          <h1 id="home-title" className="home-title" translate="no" style={{ '--i': 1 } as CSSProperties}>Orvian</h1>
+          {state.account && (
+            <p className="home-greeting" style={{ '--i': 2 } as CSSProperties}>
+              <Avatar uuid={state.account.uuid} name={state.account.name} size={32} />
+              <span>Hola, <strong translate="no">{state.account.name}</strong></span>
+            </p>
+          )}
+          <p className="home-pack" style={{ '--i': 3 } as CSSProperties}>{packLine(state)}</p>
 
+          <div className="home-play" style={{ '--i': 4 } as CSSProperties}>
           <PlayAction
             state={state}
             onAction={(action) => void perform(action)}
-            onPlayOnServer={playOnServer}
+            onPlayWithoutServer={playWithoutServer}
             onRepair={() => void perform('repair')}
             onKill={() => setKillOpen(true)}
           />
+          {canJoinHint && <p className="home-join-hint">Entrarás directamente al servidor.</p>}
+          </div>
 
           {pack.hasUpdate && phase.kind !== 'installing' && phase.kind !== 'launching' && phase.kind !== 'running' && (
             <p className="home-update-line">
@@ -68,8 +86,8 @@ export default function Home({ state }: { state: LauncherState }) {
           )}
         </section>
 
-        <aside className="home-side" aria-label="Servidor y novedades">
-          <ServerCard server={state.server} onRefresh={() => void window.orvian.refreshServer()} onPlay={canQuickPlay ? playOnServer : undefined} />
+        <aside className="home-side stagger" aria-label="Servidor y novedades">
+          <ServerCard server={state.server} onRefresh={() => void window.orvian.refreshServer()} />
           <NewsList items={state.news} />
         </aside>
       </div>
