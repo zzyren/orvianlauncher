@@ -10,7 +10,7 @@ import type { Ipc } from './ipc'
 import { log } from './logger'
 import { fetchJson } from './net'
 import type { SecretBox } from './secretBox'
-import { buildManifestFromPrismZip, publishReleaseToGitHub } from './publisher'
+import { buildManifestFromArchive, publishReleaseToGitHub } from './publisher'
 
 const TOKEN_PATTERN = /^(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})$/
 
@@ -86,6 +86,8 @@ export interface AdminDeps {
   getAccount: () => Promise<{ uuid: string } | null>
   emitProgress: (state: string, progress: number, detail: string) => void
   getLatestVersion: () => string | null
+  /** `minimumLauncher` of the manifest currently published, carried forward unless the admin changes it. */
+  getMinimumLauncher: () => string | undefined
   onPublished: (manifest: OrvianManifest, version: string) => void
 }
 
@@ -151,7 +153,8 @@ export function registerAdminIpc(ipc: Ipc, deps: AdminDeps): AdminTokenStore {
         selectionId: z.string().uuid(),
         version: z.string().regex(VERSION_PATTERN, 'Versión no válida (usa 1.2.3 o 1.2.3-beta.1)'),
         changelog: z.string().max(10_000),
-        overwrite: z.boolean().optional()
+        overwrite: z.boolean().optional(),
+        minimumLauncher: z.string().regex(/^\d+\.\d+\.\d+$/, 'Usa el formato 1.2.3').optional()
       })
     ],
     async (_event, params) => {
@@ -166,23 +169,24 @@ export function registerAdminIpc(ipc: Ipc, deps: AdminDeps): AdminTokenStore {
       }
 
       const repo = getConfig().packRepo
-      deps.emitProgress('publishing', 0.1, 'Leyendo archivo ZIP de Prism Launcher...')
-      const zipBuffer = await readFile(selection.path)
       const changelogLines = params.changelog.split('\n').map((l) => l.trim()).filter(Boolean)
+      const manifest = await buildManifestFromArchive(selection.path, {
+        version: params.version,
+        changelog: changelogLines,
+        repo,
+        minimumLauncher: params.minimumLauncher ?? deps.getMinimumLauncher() ?? '0.1.0',
+        onProgress: (detail, p) => deps.emitProgress('publishing', p ?? 0.4, detail)
+      })
 
-      deps.emitProgress('publishing', 0.3, 'Generando manifiesto de Orvian...')
-      const { manifest } = await buildManifestFromPrismZip(zipBuffer, params.version, changelogLines, repo, (detail, p) =>
-        deps.emitProgress('publishing', p ?? 0.4, detail)
-      )
-
-      deps.emitProgress('publishing', 0.6, 'Publicando release en GitHub...')
+      deps.emitProgress('publishing', 0.65, 'Publicando release en GitHub...')
       const result = await publishReleaseToGitHub({
         token,
         repo,
         version: params.version,
         changelog: params.changelog,
         manifest,
-        zipBuffer,
+        zipPath: selection.path,
+        overwrite: params.overwrite,
         onProgress: (detail, p) => deps.emitProgress('publishing', p ?? 0.8, detail)
       })
 

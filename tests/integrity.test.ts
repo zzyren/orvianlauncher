@@ -1,9 +1,10 @@
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { installVerifiedFile, sha256File, synchronizeOfficialFiles, verifyFile } from '../src/shared/integrity'
+import { installVerifiedFile, planUpdate, sha256File, synchronizeOfficialFiles, verifyFile } from '../src/shared/integrity'
 
 describe('official file integrity', () => {
   let dir = ''
@@ -153,5 +154,118 @@ describe('official file integrity', () => {
     expect(result.trustedFromState).toBe(0) // Fast-path desactivado
     expect(result.unchanged).toBe(1)        // SHA-256 verificado y coincide
     expect(result.installed).toBe(0)
+  })
+})
+
+describe('interrupted sync and size-checked fast path', () => {
+  let dir = ''
+  afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }) })
+
+  const make = (path: string, content: string, type: 'mod' | 'config' = 'mod') => {
+    const bytes = Buffer.from(content)
+    return { file: { path, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), url: 'https://example.test/pack.zip', type, required: true, userMutable: false, userDeletable: false }, bytes }
+  }
+  const marker = () => join(dir, '.orvian', 'sync.marker')
+
+  it('writes a marker before the first change and removes it once the state is committed', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'orvian-marker-'))
+    const a = make('mods/a.jar', 'aaa')
+    let markerSeenDuringWrite = false
+    await synchronizeOfficialFiles(dir, '1.0.0', [a.file], async () => {
+      markerSeenDuringWrite = existsSync(marker())
+      return new Uint8Array(a.bytes)
+    })
+    expect(markerSeenDuringWrite).toBe(false) // download happens before the first write
+    expect(existsSync(marker())).toBe(false)
+    expect(JSON.parse(await readFile(join(dir, '.orvian', 'official-state.json'), 'utf8')).version).toBe('1.0.0')
+  })
+
+  it('leaves the marker behind when the sync dies after changing a file', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'orvian-marker-'))
+    const a = make('mods/a.jar', 'aaa')
+    const b = make('mods/b.jar', 'bbb')
+    let calls = 0
+    await expect(
+      synchronizeOfficialFiles(dir, '1.0.0', [a.file, b.file], async (f) => {
+        if (++calls === 2) throw new Error('connection lost')
+        return new Uint8Array(f.path === a.file.path ? a.bytes : b.bytes)
+      })
+    ).rejects.toThrow('connection lost')
+    expect(existsSync(marker())).toBe(true)
+    expect(existsSync(join(dir, '.orvian', 'official-state.json'))).toBe(false)
+    expect(existsSync(join(dir, 'mods', 'a.jar'))).toBe(true)
+  })
+
+  it('after an interruption, verifies every file in full even when the state claims the version is installed', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'orvian-marker-'))
+    const a = make('mods/a.jar', 'aaa')
+    await synchronizeOfficialFiles(dir, '1.0.0', [a.file], async () => new Uint8Array(a.bytes))
+    // Same size, different content: only a hash check can notice
+    await writeFile(join(dir, 'mods', 'a.jar'), 'XXX')
+    await writeFile(marker(), '{}')
+
+    const result = await synchronizeOfficialFiles(dir, '1.0.0', [a.file], async () => new Uint8Array(a.bytes))
+    expect(result.trustedFromState).toBe(0)
+    expect(result.replaced).toBe(1)
+    expect(await readFile(join(dir, 'mods', 'a.jar'), 'utf8')).toBe('aaa')
+    expect(existsSync(marker())).toBe(false)
+  })
+
+  it('the fast path now notices a truncated file', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'orvian-marker-'))
+    const a = make('mods/a.jar', 'aaaaaa')
+    await synchronizeOfficialFiles(dir, '1.0.0', [a.file], async () => new Uint8Array(a.bytes))
+    await writeFile(join(dir, 'mods', 'a.jar'), 'aa')
+    const fetchBytes = vi.fn(async () => new Uint8Array(a.bytes))
+    const result = await synchronizeOfficialFiles(dir, '1.0.0', [a.file], fetchBytes)
+    expect(fetchBytes).toHaveBeenCalledOnce()
+    expect(result.trustedFromState).toBe(0)
+  })
+
+  it('a clean no-op sync never writes the marker', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'orvian-marker-'))
+    const a = make('mods/a.jar', 'aaa')
+    await synchronizeOfficialFiles(dir, '1.0.0', [a.file], async () => new Uint8Array(a.bytes))
+    await synchronizeOfficialFiles(dir, '1.0.0', [a.file], async () => { throw new Error('no fetch expected') })
+    expect(existsSync(marker())).toBe(false)
+  })
+})
+
+describe('planUpdate', () => {
+  let dir = ''
+  afterEach(async () => { if (dir) await rm(dir, { recursive: true, force: true }) })
+  const make = (path: string, content: string) => {
+    const bytes = Buffer.from(content)
+    return { file: { path, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), url: 'https://example.test/pack.zip', type: 'mod' as const, required: true, userMutable: false, userDeletable: false }, bytes }
+  }
+
+  it('estimates what an update would download without touching the instance', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'orvian-plan-'))
+    const keep = make('mods/keep.jar', 'keep')
+    const old = make('mods/change.jar', 'v1 content')
+    const gone = make('mods/gone.jar', 'gone')
+    await synchronizeOfficialFiles(dir, '1.0.0', [keep.file, old.file, gone.file], async (f) => new Uint8Array([keep, old, gone].find((x) => x.file.path === f.path)!.bytes))
+
+    const changed = make('mods/change.jar', 'v2 content, bigger')
+    const added = make('mods/new.jar', 'brand new mod')
+    const plan = await planUpdate(dir, [keep.file, changed.file, added.file])
+    expect(plan).toEqual({ install: 1, replace: 1, unchanged: 1, remove: 1, bytesToDownload: changed.file.size + added.file.size })
+    expect(await readFile(join(dir, 'mods', 'change.jar'), 'utf8')).toBe('v1 content')
+  })
+
+  it('treats a missing or wrong-size file as needing a download', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'orvian-plan-'))
+    const a = make('mods/a.jar', 'aaaa')
+    await synchronizeOfficialFiles(dir, '1.0.0', [a.file], async () => new Uint8Array(a.bytes))
+    await writeFile(join(dir, 'mods', 'a.jar'), 'a')
+    expect((await planUpdate(dir, [a.file])).replace).toBe(1)
+    await rm(join(dir, 'mods', 'a.jar'))
+    expect((await planUpdate(dir, [a.file])).install).toBe(1)
+  })
+
+  it('ignores unsafe manifest paths', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'orvian-plan-'))
+    const evil = make('../escape.jar', 'x')
+    expect(await planUpdate(dir, [evil.file])).toMatchObject({ install: 0, bytesToDownload: 0 })
   })
 })

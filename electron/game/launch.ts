@@ -1,14 +1,15 @@
 import { execSync, type ChildProcess } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createMinecraftProcessWatcher, createQuickPlayMultiplayer, launch, Version } from '@xmcl/core'
 import { OrvianError, toPayload, userMessage, type OrvianErrorPayload } from '../../src/shared/errors'
+import { hasInterruptedSync } from '../../src/shared/integrity'
 import { compareVersions, type OrvianManifest } from '../../src/shared/manifest'
 import { redactSecrets } from '../../src/shared/redact'
 import type { AccountInfo } from '../auth'
 import { getConfig } from '../config'
 import { ensureJava17 } from '../java'
 import { log, RotatingFile } from '../logger'
+import { readInstalledVersion } from '../modpack/manifest'
 import { syncModpack } from '../modpack/sync'
 import { analyzeExit, findNewCrashReport, type ExitResult } from './crash'
 import { ensureDependencies, ensureForge, ensureVanilla, forgeIds } from './install'
@@ -76,15 +77,6 @@ export function killMinecraftProcess(): void {
   runtime.playing = false
 }
 
-async function readInstalledVersion(instance: string): Promise<string | null> {
-  try {
-    const state = JSON.parse(await readFile(join(instance, '.orvian', 'official-state.json'), 'utf8')) as { version?: string }
-    return state.version || null
-  } catch {
-    return null
-  }
-}
-
 function failure(err: unknown): PipelineResult {
   return { ok: false, message: userMessage(err), error: toPayload(err) }
 }
@@ -106,6 +98,8 @@ async function runPipeline(deps: GameDeps, mode: 'play' | 'repair', options: Pla
     }
 
     const installedVersion = await readInstalledVersion(instance)
+    // A sync that never finished may have left a mix of old and new files: never run that unchecked.
+    if (options.playInstalled && (await hasInterruptedSync(instance))) throw new OrvianError('UPDATE_INTERRUPTED')
     const manifest = options.playInstalled ? null : await deps.getManifest()
     if (!manifest && !installedVersion) throw new OrvianError('OFFLINE_NOT_INSTALLED')
     if (manifest && compareVersions(deps.appVersion, manifest.minimumLauncher) < 0) {
@@ -140,7 +134,7 @@ async function runPipeline(deps: GameDeps, mode: 'play' | 'repair', options: Pla
             : `Verificando modpack v${required}...`
       tracker.begin('modpack', detail)
       log.info('[Launcher] Modpack instalado: %s, requerido: %s, reparación: %s', installedVersion ?? 'ninguno', required, fullVerify)
-      const result = await syncModpack(instance, manifest.files, required, (d) => tracker.update({ detail: d }), { forceVerify: fullVerify })
+      const result = await syncModpack({ instanceDir: instance, manifest, fullVerify, onProgress: (update) => tracker.update(update) })
       log.info('[Launcher] Sync: %d instalados, %d reemplazados, %d sin cambios, %d de confianza', result.installed, result.replaced, result.unchanged, result.trustedFromState)
       deps.onPackSynced(required)
       tracker.done('modpack')

@@ -102,6 +102,7 @@ describe('admin IPC gate', () => {
       getAccount: async () => (uuid ? { uuid } : null),
       emitProgress: () => undefined,
       getLatestVersion: () => latest,
+      getMinimumLauncher: () => undefined,
       onPublished: () => undefined
     })
   }

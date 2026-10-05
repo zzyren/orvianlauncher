@@ -13,7 +13,7 @@ const api = {
   openFolder: (kind: 'mods' | 'shaders' | 'resourcepacks' | 'logs') => ipcRenderer.invoke('folder:open', kind),
   resetInstallation: (options: { deleteWorlds: boolean } = { deleteWorlds: false }) => ipcRenderer.invoke('launcher:reset', options),
   pickMrpack: () => ipcRenderer.invoke('admin:pick-archive'),
-  publishUpdate: (params: { selectionId: string; version: string; changelog: string; overwrite?: boolean }) =>
+  publishUpdate: (params: { selectionId: string; version: string; changelog: string; overwrite?: boolean; minimumLauncher?: string }) =>
     ipcRenderer.invoke('admin:publish', params),
   adminTokenStatus: () => ipcRenderer.invoke('admin:token-status'),
   adminSetToken: (token: string) => ipcRenderer.invoke('admin:token-set', token),
