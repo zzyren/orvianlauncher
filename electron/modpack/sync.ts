@@ -17,7 +17,6 @@ export async function syncModpack(
   // Limpiar archivos temporales huérfanos de sincronizaciones anteriores interrumpidas
   try {
     const { readdir, rm: rmFile } = await import('node:fs/promises')
-    const { glob } = await import('node:fs/promises').catch(() => ({ glob: null }))
     // Buscar archivos .orvian-tmp en mods/ y config/ recursivamente
     for (const dir of ['mods', 'config', 'defaultconfigs', 'shaderpacks', 'resourcepacks']) {
       const dirPath = join(instanceDir, dir)
