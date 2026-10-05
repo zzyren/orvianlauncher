@@ -15,10 +15,10 @@ export function useLauncherActions(): { perform: Perform; performErrorAction: (a
       try {
         switch (action) {
           case 'play':
-            await window.orvian.play()
+            await window.orvian.play({ quickPlay: true })
             break
           case 'play-installed':
-            await window.orvian.play({ playInstalled: true })
+            await window.orvian.play({ quickPlay: true, playInstalled: true })
             break
           case 'repair':
             await window.orvian.repair()
